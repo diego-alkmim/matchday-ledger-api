@@ -1,0 +1,104 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  DIRETOR
+}
+
+enum TransactionType {
+  ENTRADA
+  SAIDA
+}
+
+enum PaymentMethod {
+  PIX
+  DINHEIRO
+  CARTAO
+}
+
+enum GameStatus {
+  ABERTO
+  FECHADO
+}
+
+enum CategoryType {
+  ENTRADA
+  SAIDA
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  role         Role
+  director     Director? @relation("DirectorUser", fields: [directorId], references: [id])
+  directorId   String?   @unique
+  refreshTokens RefreshToken[]
+  createdAt    DateTime @default(now())
+  transactions Transaction[] @relation("TransactionsCreated")
+}
+
+model Director {
+  id       String   @id @default(cuid())
+  name     String   @unique
+  contact  String?
+  active   Boolean  @default(true)
+  user     User?    @relation("DirectorUser")
+  transactions Transaction[]
+}
+
+model Game {
+  id        String    @id @default(cuid())
+  date      DateTime
+  location  String?
+  opponent  String?
+  status    GameStatus @default(ABERTO)
+  createdAt DateTime  @default(now())
+  transactions Transaction[]
+}
+
+model Category {
+  id      String  @id @default(cuid())
+  name    String  @unique
+  type    CategoryType @default(ENTRADA)
+  active  Boolean @default(true)
+  transactions Transaction[]
+}
+
+model Transaction {
+  id              String          @id @default(cuid())
+  type            TransactionType
+  amount          Decimal         @db.Decimal(10, 2)
+  date            DateTime
+  paymentMethod   PaymentMethod
+  notes           String?
+  game            Game            @relation(fields: [gameId], references: [id])
+  gameId          String
+  category        Category        @relation(fields: [categoryId], references: [id])
+  categoryId      String
+  director        Director?       @relation(fields: [directorId], references: [id])
+  directorId      String?
+  createdByUser   User            @relation("TransactionsCreated", fields: [createdByUserId], references: [id])
+  createdByUserId String
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+}
+
+model RefreshToken {
+  id         String   @id @default(cuid())
+  tokenHash  String
+  user       User     @relation(fields: [userId], references: [id])
+  userId     String
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  userAgent  String?
+  ip         String?
+  createdAt  DateTime @default(now())
+}
