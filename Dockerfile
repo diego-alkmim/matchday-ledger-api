@@ -1,7 +1,10 @@
 FROM node:20-bullseye-slim AS builder
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci
+RUN apt-get update -y \
+  && apt-get install -y --no-install-recommends python3 make g++ openssl \
+  && rm -rf /var/lib/apt/lists/* \
+  && npm ci
 COPY . .
 RUN npm run build
 
