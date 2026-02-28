@@ -15,12 +15,15 @@ export class ReportsService {
 
   monthly(from: string, to: string) {
     return this.prisma.$queryRaw`
-      SELECT date_trunc('month', date) as month,
+      SELECT 
+        to_char(date_trunc('month', "createdAt"), 'YYYY-MM') as month_label,
+        date_trunc('month', "createdAt") as month,
         SUM(CASE WHEN type='ENTRADA' THEN amount ELSE 0 END) as entradas,
         SUM(CASE WHEN type='SAIDA' THEN amount ELSE 0 END) as saidas
       FROM "Transaction"
-      WHERE date BETWEEN ${from}::date AND ${to}::date
-      GROUP BY 1 ORDER BY 1;
+      WHERE "createdAt" BETWEEN ${from}::date AND ${to}::date
+      GROUP BY 1,2
+      ORDER BY 2;
     `;
   }
 
