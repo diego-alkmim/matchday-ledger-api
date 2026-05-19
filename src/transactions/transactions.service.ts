@@ -34,6 +34,9 @@ export class TransactionsService {
       if (data.type !== TransactionType.ENTRADA) throw new ForbiddenException('Diretor só lança entrada');
       data.directorId = user.directorId;
     }
+    if (user.role === Role.ADMIN && data.type === TransactionType.ENTRADA && !data.directorId) {
+      throw new ForbiddenException('Entrada precisa estar vinculada a um diretor');
+    }
     data.createdByUserId = user.sub;
     return this.prisma.transaction.create({ data });
   }
@@ -43,6 +46,10 @@ export class TransactionsService {
     if (!tx) throw new ForbiddenException();
     if (tx.game.status === GameStatus.FECHADO && user.role !== Role.ADMIN) throw new ForbiddenException('Game closed');
     if (user.role === Role.DIRETOR && tx.type !== TransactionType.ENTRADA) throw new ForbiddenException();
+    if (user.role === Role.ADMIN && (data.type === TransactionType.ENTRADA || tx.type === TransactionType.ENTRADA)) {
+      const nextDirectorId = data.directorId ?? tx.directorId;
+      if (!nextDirectorId) throw new ForbiddenException('Entrada precisa estar vinculada a um diretor');
+    }
 
     const parsedDate = this.normalizeDate(data.date);
     if (data.date && !parsedDate) throw new ForbiddenException('Data inválida');
