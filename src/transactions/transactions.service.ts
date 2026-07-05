@@ -1,6 +1,6 @@
-﻿import { ForbiddenException, Injectable } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
-import { GameStatus, Role, TransactionType } from '@prisma/client';
+﻿import { ForbiddenException, Injectable } from "@nestjs/common";
+import { PrismaService } from "../prisma/prisma.service";
+import { GameStatus, Role, TransactionType } from "@prisma/client";
 
 @Injectable()
 export class TransactionsService {
@@ -9,8 +9,8 @@ export class TransactionsService {
   private normalizeDate(input: any): Date | undefined {
     if (!input) return undefined;
     if (input instanceof Date) return input;
-    if (typeof input === 'string') {
-      const iso = input.includes('T') ? input : `${input}T00:00:00`;
+    if (typeof input === "string") {
+      const iso = input.includes("T") ? input : `${input}T00:00:00`;
       const d = new Date(iso);
       if (!isNaN(d.getTime())) return d;
     }
@@ -18,45 +18,82 @@ export class TransactionsService {
   }
 
   list() {
-    return this.prisma.transaction.findMany({ include: { game: true, category: true, director: true } });
+    return this.prisma.transaction.findMany({
+      include: { game: true, category: true, director: true },
+    });
   }
 
   async create(data: any, user: any) {
-    const game = await this.prisma.game.findUnique({ where: { id: data.gameId } });
-    if (!game) throw new ForbiddenException('Game not found');
-    if (game.status === GameStatus.FECHADO && user.role !== Role.ADMIN) throw new ForbiddenException('Game closed');
+    const game = await this.prisma.game.findUnique({
+      where: { id: data.gameId },
+    });
+    if (!game) throw new ForbiddenException("Game not found");
+    if (game.status === GameStatus.FECHADO) {
+      throw new ForbiddenException("Não é permitido lançar em jogo fechado");
+    }
 
     const parsedDate = this.normalizeDate(data.date);
-    if (!parsedDate) throw new ForbiddenException('Data inválida');
+    if (!parsedDate) throw new ForbiddenException("Data inválida");
     data.date = parsedDate;
 
     if (user.role === Role.DIRETOR) {
-      if (data.type !== TransactionType.ENTRADA) throw new ForbiddenException('Diretor só lança entrada');
+      if (data.type !== TransactionType.ENTRADA)
+        throw new ForbiddenException("Diretor só lança entrada");
       data.directorId = user.directorId;
     }
-    if (user.role === Role.ADMIN && data.type === TransactionType.ENTRADA && !data.directorId) {
-      throw new ForbiddenException('Entrada precisa estar vinculada a um diretor');
+    if (
+      user.role === Role.ADMIN &&
+      data.type === TransactionType.ENTRADA &&
+      !data.directorId
+    ) {
+      throw new ForbiddenException(
+        "Entrada precisa estar vinculada a um diretor",
+      );
     }
     data.createdByUserId = user.sub;
     return this.prisma.transaction.create({ data });
   }
 
   async update(id: string, data: any, user: any) {
-    const tx = await this.prisma.transaction.findUnique({ where: { id }, include: { game: true } });
+    const tx = await this.prisma.transaction.findUnique({
+      where: { id },
+      include: { game: true },
+    });
     if (!tx) throw new ForbiddenException();
-    if (tx.game.status === GameStatus.FECHADO && user.role !== Role.ADMIN) throw new ForbiddenException('Game closed');
-    if (user.role === Role.DIRETOR && tx.type !== TransactionType.ENTRADA) throw new ForbiddenException();
-    if (user.role === Role.ADMIN && (data.type === TransactionType.ENTRADA || tx.type === TransactionType.ENTRADA)) {
+
+    const targetGameId = data.gameId ?? tx.gameId;
+    const targetGame =
+      targetGameId === tx.gameId
+        ? tx.game
+        : await this.prisma.game.findUnique({ where: { id: targetGameId } });
+
+    if (!targetGame) throw new ForbiddenException("Game not found");
+    if (targetGame.status === GameStatus.FECHADO) {
+      throw new ForbiddenException("N?o ? permitido lan?ar em jogo fechado");
+    }
+
+    if (user.role === Role.DIRETOR && tx.type !== TransactionType.ENTRADA)
+      throw new ForbiddenException();
+    if (
+      user.role === Role.ADMIN &&
+      (data.type === TransactionType.ENTRADA ||
+        tx.type === TransactionType.ENTRADA)
+    ) {
       const nextDirectorId = data.directorId ?? tx.directorId;
-      if (!nextDirectorId) throw new ForbiddenException('Entrada precisa estar vinculada a um diretor');
+      if (!nextDirectorId)
+        throw new ForbiddenException(
+          "Entrada precisa estar vinculada a um diretor",
+        );
     }
 
     const parsedDate = this.normalizeDate(data.date);
-    if (data.date && !parsedDate) throw new ForbiddenException('Data inválida');
+    if (data.date && !parsedDate) throw new ForbiddenException("Data inválida");
     if (parsedDate) data.date = parsedDate;
 
     return this.prisma.transaction.update({ where: { id }, data });
   }
 
-  remove(id: string) { return this.prisma.transaction.delete({ where: { id } }); }
+  remove(id: string) {
+    return this.prisma.transaction.delete({ where: { id } });
+  }
 }
