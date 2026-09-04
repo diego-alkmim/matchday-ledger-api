@@ -1,10 +1,12 @@
-import { Body, Controller, Get, Post, Put, Param, Delete, UseGuards } from '@nestjs/common';
-import { CategoriesService } from './categories.service';
-import { Roles } from '../common/decorators/roles.decorator';
+import { Body, Controller, Delete, Get, Param, Post, Put, UseGuards } from '@nestjs/common';
+import { ApiBearerAuth, ApiBody, ApiTags } from '@nestjs/swagger';
 import { Role } from '@prisma/client';
-import { RolesGuard } from '../common/guards/roles.guard';
+import { Roles } from '../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { ApiBearerAuth, ApiTags, ApiBody } from '@nestjs/swagger';
+import { RolesGuard } from '../common/guards/roles.guard';
+import { CreateCategoryDto } from './dto/create-category.dto';
+import { UpdateCategoryDto } from './dto/update-category.dto';
+import { CategoriesService } from './categories.service';
 
 @Controller('categories')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -13,41 +15,28 @@ import { ApiBearerAuth, ApiTags, ApiBody } from '@nestjs/swagger';
 export class CategoriesController {
   constructor(private service: CategoriesService) {}
 
-  // GET liberado para qualquer usuário autenticado
   @Get()
-  list() { return this.service.list(); }
+  list() {
+    return this.service.list();
+  }
 
-  // CRUD restrito a ADMIN
   @Roles(Role.ADMIN)
   @Post()
-  @ApiBody({
-    schema: {
-      type: 'object',
-      required: ['name', 'type'],
-      properties: {
-        name: { type: 'string', example: 'Arbitragem' },
-        type: { type: 'string', enum: ['ENTRADA', 'SAIDA'], example: 'SAIDA' },
-        active: { type: 'boolean', example: true },
-      },
-    },
-  })
-  create(@Body() body: any) { return this.service.create(body); }
+  @ApiBody({ type: CreateCategoryDto })
+  create(@Body() body: CreateCategoryDto) {
+    return this.service.create(body);
+  }
 
   @Roles(Role.ADMIN)
   @Put(':id')
-  @ApiBody({
-    schema: {
-      type: 'object',
-      properties: {
-        name: { type: 'string' },
-        type: { type: 'string', enum: ['ENTRADA', 'SAIDA'] },
-        active: { type: 'boolean' },
-      },
-    },
-  })
-  update(@Param('id') id: string, @Body() body: any) { return this.service.update(id, body); }
+  @ApiBody({ type: UpdateCategoryDto })
+  update(@Param('id') id: string, @Body() body: UpdateCategoryDto) {
+    return this.service.update(id, body);
+  }
 
   @Roles(Role.ADMIN)
   @Delete(':id')
-  remove(@Param('id') id: string) { return this.service.remove(id); }
+  remove(@Param('id') id: string) {
+    return this.service.remove(id);
+  }
 }

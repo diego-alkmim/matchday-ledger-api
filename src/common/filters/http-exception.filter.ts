@@ -1,12 +1,38 @@
-import { ExceptionFilter, Catch, ArgumentsHost, HttpException } from '@nestjs/common';
+﻿import { ArgumentsHost, Catch, ExceptionFilter, HttpException } from '@nestjs/common';
+import { Response } from 'express';
+import { domainErrors } from '../errors/domain-errors';
 
 @Catch()
 export class HttpExceptionFilter implements ExceptionFilter {
-  catch(exception: any, host: ArgumentsHost) {
-    const ctx = host.switchToHttp();
-    const res = ctx.getResponse();
+  catch(exception: unknown, host: ArgumentsHost) {
+    const response = host.switchToHttp().getResponse<Response>();
     const status = exception instanceof HttpException ? exception.getStatus() : 500;
-    const message = exception.message || 'Unexpected error';
-    res.status(status).json({ success: false, message });
+    const exceptionResponse = exception instanceof HttpException ? exception.getResponse() : null;
+
+    let message: string = domainErrors.unexpected;
+    let errors: string[] | undefined;
+
+    if (typeof exceptionResponse === 'string') {
+      message = exceptionResponse;
+    } else if (exceptionResponse && typeof exceptionResponse === 'object') {
+      const payload = exceptionResponse as Record<string, unknown>;
+      if (typeof payload.message === 'string') {
+        message = payload.message;
+      } else if (Array.isArray(payload.message) && payload.message.length) {
+        errors = payload.message.filter((item): item is string => typeof item === 'string');
+        message = errors[0] ?? domainErrors.invalidPayload;
+      }
+      if (Array.isArray(payload.errors) && payload.errors.length) {
+        errors = payload.errors.filter((item): item is string => typeof item === 'string');
+      }
+    } else if (exception instanceof Error && exception.message) {
+      message = exception.message;
+    }
+
+    response.status(status).json({
+      success: false,
+      message,
+      ...(errors?.length ? { errors } : {}),
+    });
   }
 }

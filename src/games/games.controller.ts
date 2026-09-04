@@ -1,10 +1,12 @@
-import { Body, Controller, Get, Post, Put, Param, Delete, UseGuards } from '@nestjs/common';
-import { GamesService } from './games.service';
-import { Roles } from '../common/decorators/roles.decorator';
+import { Body, Controller, Delete, Get, Param, Post, Put, UseGuards } from '@nestjs/common';
+import { ApiBearerAuth, ApiBody, ApiTags } from '@nestjs/swagger';
 import { Role } from '@prisma/client';
-import { RolesGuard } from '../common/guards/roles.guard';
+import { Roles } from '../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { ApiBearerAuth, ApiTags, ApiBody } from '@nestjs/swagger';
+import { RolesGuard } from '../common/guards/roles.guard';
+import { CreateGameDto } from './dto/create-game.dto';
+import { UpdateGameDto } from './dto/update-game.dto';
+import { GamesService } from './games.service';
 
 @Controller('games')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -12,40 +14,41 @@ import { ApiBearerAuth, ApiTags, ApiBody } from '@nestjs/swagger';
 @ApiBearerAuth('access-token')
 export class GamesController {
   constructor(private service: GamesService) {}
-  @Get() list() { return this.service.list(); }
+
+  @Get()
+  list() {
+    return this.service.list();
+  }
+
   @Roles(Role.ADMIN)
   @Post()
-  @ApiBody({
-    schema: {
-      type: 'object',
-      required: ['date', 'status'],
-      properties: {
-        date: { type: 'string', format: 'date-time', example: '2026-02-22T14:00:00Z' },
-        opponent: { type: 'string', example: 'Time X' },
-        location: { type: 'string', example: 'Arena Local' },
-        status: { type: 'string', enum: ['ABERTO', 'FECHADO'], example: 'ABERTO' },
-      },
-    },
-  })
-  create(@Body() body: any) { return this.service.create(body); }
+  @ApiBody({ type: CreateGameDto })
+  create(@Body() body: CreateGameDto) {
+    return this.service.create(body);
+  }
+
   @Roles(Role.ADMIN)
   @Put(':id')
-  @ApiBody({
-    schema: {
-      type: 'object',
-      properties: {
-        date: { type: 'string', format: 'date-time' },
-        opponent: { type: 'string' },
-        location: { type: 'string' },
-        status: { type: 'string', enum: ['ABERTO', 'FECHADO'] },
-      },
-    },
-  })
-  update(@Param('id') id: string, @Body() body: any) { return this.service.update(id, body); }
+  @ApiBody({ type: UpdateGameDto })
+  update(@Param('id') id: string, @Body() body: UpdateGameDto) {
+    return this.service.update(id, body);
+  }
+
   @Roles(Role.ADMIN)
-  @Delete(':id') remove(@Param('id') id: string) { return this.service.remove(id); }
+  @Delete(':id')
+  remove(@Param('id') id: string) {
+    return this.service.remove(id);
+  }
+
   @Roles(Role.ADMIN)
-  @Post(':id/close') close(@Param('id') id: string) { return this.service.setStatus(id, 'FECHADO'); }
+  @Post(':id/close')
+  close(@Param('id') id: string) {
+    return this.service.setStatus(id, 'FECHADO');
+  }
+
   @Roles(Role.ADMIN)
-  @Post(':id/reopen') reopen(@Param('id') id: string) { return this.service.setStatus(id, 'ABERTO'); }
+  @Post(':id/reopen')
+  reopen(@Param('id') id: string) {
+    return this.service.setStatus(id, 'ABERTO');
+  }
 }

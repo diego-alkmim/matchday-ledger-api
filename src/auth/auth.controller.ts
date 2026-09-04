@@ -1,12 +1,37 @@
-import { Body, Controller, Get, Post, Req, Res, UseGuards } from '@nestjs/common';
-import { AuthService } from './auth.service';
-import { LoginSchema, LoginDto } from './dto/login.dto';
-import { RefreshSchema, RefreshDto } from './dto/refresh.dto';
-import { Request, Response } from 'express';
-import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { CurrentUser } from '../common/decorators/user.decorator';
+﻿import {
+  BadRequestException,
+  Body,
+  Controller,
+  ForbiddenException,
+  Get,
+  Post,
+  Req,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
+import { ApiBearerAuth, ApiBody, ApiCookieAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
-import { ApiBearerAuth, ApiCookieAuth, ApiOperation, ApiTags, ApiBody } from '@nestjs/swagger';
+import { Request, Response } from 'express';
+import { domainErrors } from '../common/errors/domain-errors';
+import { CurrentUser } from '../common/decorators/user.decorator';
+import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { LoginDto, LoginSchema } from './dto/login.dto';
+import { RefreshDto, RefreshSchema } from './dto/refresh.dto';
+import { AuthService } from './auth.service';
+import { AccessTokenPayload } from './interfaces/access-token-payload.interface';
+
+function getRefreshCookie(req: Request): string | undefined {
+  const cookies: unknown = req.cookies;
+  if (!cookies || typeof cookies !== 'object') return undefined;
+
+  const token = (cookies as Record<string, unknown>).refresh_token;
+  return typeof token === 'string' ? token : undefined;
+}
+
+function getUserAgent(req: Request): string | undefined {
+  const userAgent = req.headers['user-agent'];
+  return typeof userAgent === 'string' ? userAgent : undefined;
+}
 
 @Controller('auth')
 @ApiTags('Auth')
@@ -15,7 +40,11 @@ export class AuthController {
 
   @Post('login')
   @Throttle({ auth: { limit: 5, ttl: 60 } })
-  @ApiOperation({ summary: 'Login', description: 'Autentica usuário e retorna access token (header) + refresh token em cookie HttpOnly.' })
+  @ApiOperation({
+    summary: 'Login',
+    description:
+      'Autentica usuário e retorna access token (header) + refresh token em cookie HttpOnly.',
+  })
   @ApiBody({
     schema: {
       type: 'object',
@@ -26,9 +55,18 @@ export class AuthController {
       },
     },
   })
-  async login(@Body() body: LoginDto, @Res({ passthrough: true }) res: Response, @Req() req: Request) {
+  async login(
+    @Body() body: LoginDto,
+    @Res({ passthrough: true }) res: Response,
+    @Req() req: Request,
+  ) {
     const data = LoginSchema.parse(body);
-    const { user, access, refresh, csrfToken } = await this.auth.login(data, req.headers['user-agent'], req.ip);
+    const { user, access, refresh, csrfToken } = await this.auth.login(
+      data,
+      getUserAgent(req),
+      req.ip,
+    );
+
     this.setRefreshCookie(res, refresh);
     res.setHeader('x-csrf-token', csrfToken);
     return { accessToken: access, user, csrfToken };
@@ -37,7 +75,11 @@ export class AuthController {
   @Post('refresh')
   @Throttle({ auth: { limit: 5, ttl: 60 } })
   @ApiCookieAuth('refresh_token')
-  @ApiOperation({ summary: 'Renovar access token', description: 'Usa refresh_token (cookie HttpOnly) + CSRF token para emitir novo access token curto.' })
+  @ApiOperation({
+    summary: 'Renovar access token',
+    description:
+      'Usa refresh_token (cookie HttpOnly) + CSRF token para emitir novo access token curto.',
+  })
   @ApiBody({
     schema: {
       type: 'object',
@@ -47,20 +89,37 @@ export class AuthController {
       },
     },
   })
-  async refresh(@Body() body: RefreshDto, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
+  async refresh(
+    @Body() body: RefreshDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
     const { csrfToken } = RefreshSchema.parse(body);
-    const refreshCookie = req.cookies['refresh_token'];
-    if (!refreshCookie) throw new Error('No refresh');
+    const refreshCookie = getRefreshCookie(req);
+
+    if (!refreshCookie) {
+      throw new BadRequestException(domainErrors.refreshTokenMissing);
+    }
+
     const payload = await this.auth.refresh(refreshCookie);
-    if (csrfToken !== req.headers['x-csrf-token']) throw new Error('CSRF mismatch');
+
+    if (csrfToken !== req.headers['x-csrf-token']) {
+      throw new ForbiddenException(domainErrors.invalidCsrf);
+    }
+
     this.setRefreshCookie(res, payload.refresh);
     res.setHeader('x-csrf-token', payload.csrfToken);
     return { accessToken: payload.access, user: payload.user, csrfToken: payload.csrfToken };
   }
 
   @Post('logout')
-  async logout(@CurrentUser() user: any, @Res({ passthrough: true }) res: Response) {
-    if (user) await this.auth.logout(user.sub);
+  async logout(
+    @CurrentUser() user: AccessTokenPayload | undefined,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    if (user) {
+      await this.auth.logout(user.sub);
+    }
     res.clearCookie('refresh_token', { path: '/' });
     return { ok: true };
   }
@@ -68,7 +127,9 @@ export class AuthController {
   @Get('me')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth('access-token')
-  me(@CurrentUser() user: any) { return user; }
+  me(@CurrentUser() user: AccessTokenPayload) {
+    return user;
+  }
 
   private setRefreshCookie(res: Response, token: string) {
     const isProd = process.env.NODE_ENV === 'production';

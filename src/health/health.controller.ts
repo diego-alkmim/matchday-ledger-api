@@ -1,6 +1,7 @@
 import { Controller, Get, ServiceUnavailableException } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { domainErrors } from '../common/errors/domain-errors';
+import { PrismaService } from '../prisma/prisma.service';
 
 @Controller('health')
 @ApiTags('Health')
@@ -8,7 +9,10 @@ export class HealthController {
   constructor(private prisma: PrismaService) {}
 
   @Get()
-  @ApiOperation({ summary: 'Health check', description: 'Valida conectividade com o banco e retorna latência.' })
+  @ApiOperation({
+    summary: 'Health check',
+    description: 'Valida conectividade com o banco e retorna latência.',
+  })
   @ApiResponse({
     status: 200,
     description: 'Serviço saudável',
@@ -28,7 +32,7 @@ export class HealthController {
       example: {
         status: 'error',
         db: 'down',
-        message: 'Database unreachable',
+        message: 'Banco de dados indisponível',
         timestamp: '2026-02-28T15:00:00.000Z',
       },
     },
@@ -44,11 +48,12 @@ export class HealthController {
         latencyMs,
         timestamp: new Date().toISOString(),
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
       throw new ServiceUnavailableException({
         status: 'error',
         db: 'down',
-        message: error?.message || 'Database unreachable',
+        message:
+          error instanceof Error ? error.message : domainErrors.healthDatabaseUnavailable,
         timestamp: new Date().toISOString(),
       });
     }
