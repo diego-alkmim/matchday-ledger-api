@@ -1,4 +1,4 @@
-FROM node:20-bullseye-slim AS builder
+FROM node:24-bookworm-slim AS builder
 WORKDIR /app
 COPY package*.json ./
 RUN apt-get update -y \
@@ -8,7 +8,7 @@ RUN apt-get update -y \
 COPY . .
 RUN npm run build
 
-FROM node:20-bullseye-slim
+FROM node:24-bookworm-slim
 WORKDIR /app
 COPY --from=builder /app ./
 RUN apt-get update -y && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*

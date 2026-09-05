@@ -1,9 +1,12 @@
 {
   "name": "matchday-ledger-api",
   "version": "1.0.0",
+  "engines": {
+    "node": ">=24 <25"
+  },
   "main": "dist/main.js",
   "scripts": {
-    "dev": "nest start --watch",
+    "dev": "node --watch --require ts-node/register src/main.ts",
     "build": "prisma generate && nest build",
     "start": "node dist/src/main.js",
     "lint": "eslint .",
