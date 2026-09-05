@@ -20,10 +20,25 @@ const createCookieParser = cookieParser as unknown as CookieParserFactory;
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   const config = app.get(ConfigService);
-  const origin = config.get<string>('CORS_ORIGIN');
+  const corsOrigin = config.getOrThrow<string>('CORS_ORIGIN');
+  const corsOrigins = corsOrigin
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  if (!corsOrigins.length) {
+    throw new Error('CORS_ORIGIN deve conter ao menos uma origem permitida.');
+  }
+
+  if (config.get<string>('NODE_ENV') === 'production') {
+    const requireAuth = config.getOrThrow<string>('REQUIRE_AUTH');
+    if (requireAuth !== 'true') {
+      throw new Error('REQUIRE_AUTH deve ser "true" em produção.');
+    }
+  }
 
   app.enableCors({
-    origin,
+    origin: corsOrigins,
     credentials: true,
     methods: 'GET,POST,PUT,PATCH,DELETE',
     exposedHeaders: ['x-csrf-token'],
@@ -42,7 +57,7 @@ async function bootstrap() {
           scriptSrc: ["'self'", "'unsafe-inline'"],
           styleSrc: ["'self'", "'unsafe-inline'"],
           imgSrc: ["'self'", 'data:'],
-          connectSrc: ["'self'", origin].filter(Boolean) as string[],
+          connectSrc: ["'self'", ...corsOrigins],
         },
       },
       hsts: { maxAge: 31536000, includeSubDomains: true, preload: true },
@@ -68,23 +83,19 @@ async function bootstrap() {
   app.useGlobalFilters(new HttpExceptionFilter());
   app.useGlobalInterceptors(new ResponseInterceptor());
 
-  const swaggerEnabled =
-    config.get<string>('SWAGGER_ENABLED') ??
-    (process.env.NODE_ENV !== 'production' ? 'true' : 'false');
+  const swaggerEnabled = config.get<string>('SWAGGER_ENABLED') === 'true';
 
-  if (swaggerEnabled === 'true') {
-    const swaggerUser = config.get<string>('SWAGGER_USER');
-    const swaggerPass = config.get<string>('SWAGGER_PASSWORD');
+  if (swaggerEnabled) {
+    const swaggerUser = config.getOrThrow<string>('SWAGGER_USER');
+    const swaggerPass = config.getOrThrow<string>('SWAGGER_PASSWORD');
 
-    if (swaggerUser && swaggerPass) {
-      app.use(
-        '/docs',
-        basicAuth({
-          users: { [swaggerUser]: swaggerPass },
-          challenge: true,
-        }),
-      );
-    }
+    app.use(
+      '/docs',
+      basicAuth({
+        users: { [swaggerUser]: swaggerPass },
+        challenge: true,
+      }),
+    );
 
     const swaggerConfig = new DocumentBuilder()
       .setTitle('Matchday Ledger API')

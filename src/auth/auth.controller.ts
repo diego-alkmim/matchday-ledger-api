@@ -7,14 +7,13 @@
   Post,
   Req,
   Res,
-  UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiBody, ApiCookieAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { Request, Response } from 'express';
 import { domainErrors } from '../common/errors/domain-errors';
 import { CurrentUser } from '../common/decorators/user.decorator';
-import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { Public } from '../common/decorators/public.decorator';
 import { LoginDto, LoginSchema } from './dto/login.dto';
 import { RefreshDto, RefreshSchema } from './dto/refresh.dto';
 import { AuthService } from './auth.service';
@@ -39,6 +38,7 @@ export class AuthController {
   constructor(private auth: AuthService) {}
 
   @Post('login')
+  @Public()
   @Throttle({ auth: { limit: 5, ttl: 60 } })
   @ApiOperation({
     summary: 'Login',
@@ -73,6 +73,7 @@ export class AuthController {
   }
 
   @Post('refresh')
+  @Public()
   @Throttle({ auth: { limit: 5, ttl: 60 } })
   @ApiCookieAuth('refresh_token')
   @ApiOperation({
@@ -113,6 +114,7 @@ export class AuthController {
   }
 
   @Post('logout')
+  @Public()
   async logout(
     @CurrentUser() user: AccessTokenPayload | undefined,
     @Res({ passthrough: true }) res: Response,
@@ -125,7 +127,6 @@ export class AuthController {
   }
 
   @Get('me')
-  @UseGuards(JwtAuthGuard)
   @ApiBearerAuth('access-token')
   me(@CurrentUser() user: AccessTokenPayload) {
     return user;
