@@ -11,6 +11,11 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { ResponseInterceptor } from './common/interceptors/response.interceptor';
 import { domainErrors } from './common/errors/domain-errors';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
+import {
+  assertProductionAuth,
+  getSwaggerCredentials,
+  getCorsOrigins,
+} from './config/security-config';
 
 type CompressionFactory = () => RequestHandler;
 type CookieParserFactory = () => RequestHandler;
@@ -21,21 +26,8 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   const config = app.get(ConfigService);
   const corsOrigin = config.getOrThrow<string>('CORS_ORIGIN');
-  const corsOrigins = corsOrigin
-    .split(',')
-    .map((value) => value.trim())
-    .filter(Boolean);
-
-  if (!corsOrigins.length) {
-    throw new Error('CORS_ORIGIN deve conter ao menos uma origem permitida.');
-  }
-
-  if (config.get<string>('NODE_ENV') === 'production') {
-    const requireAuth = config.getOrThrow<string>('REQUIRE_AUTH');
-    if (requireAuth !== 'true') {
-      throw new Error('REQUIRE_AUTH deve ser "true" em produção.');
-    }
-  }
+  const corsOrigins = getCorsOrigins(corsOrigin);
+  assertProductionAuth(config.get<string>('NODE_ENV'), config.get<string>('REQUIRE_AUTH'));
 
   app.enableCors({
     origin: corsOrigins,
@@ -86,8 +78,10 @@ async function bootstrap() {
   const swaggerEnabled = config.get<string>('SWAGGER_ENABLED') === 'true';
 
   if (swaggerEnabled) {
-    const swaggerUser = config.getOrThrow<string>('SWAGGER_USER');
-    const swaggerPass = config.getOrThrow<string>('SWAGGER_PASSWORD');
+    const { user: swaggerUser, password: swaggerPass } = getSwaggerCredentials(
+      config.get<string>('SWAGGER_USER'),
+      config.get<string>('SWAGGER_PASSWORD'),
+    );
 
     app.use(
       '/docs',
