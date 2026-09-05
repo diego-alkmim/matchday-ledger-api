@@ -37,6 +37,18 @@ export default defineConfig([
       "@typescript-eslint/no-require-imports": "off",
     },
   },
+  {
+    files: ["jest.config.cjs"],
+    languageOptions: {
+      globals: { module: "readonly" },
+    },
+  },
+  {
+    files: ["src/**/*.spec.ts"],
+    languageOptions: {
+      globals: globals.jest,
+    },
+  },
   globalIgnores([
     "node_modules/**",
     "dist/**",
