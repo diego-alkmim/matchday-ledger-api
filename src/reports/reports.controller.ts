@@ -1,6 +1,5 @@
-import { Controller, Get, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
-import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { AnalyticalByGameQueryDto } from './dto/analytical-by-game-query.dto';
 import { ByGameReportQueryDto } from './dto/by-game-report-query.dto';
 import { ConsolidatedByDirectorQueryDto } from './dto/consolidated-by-director-query.dto';
@@ -8,7 +7,6 @@ import { DateRangeRequiredQueryDto } from './dto/date-range-required-query.dto';
 import { ReportsService } from './reports.service';
 
 @Controller('reports')
-@UseGuards(JwtAuthGuard)
 @ApiTags('Reports')
 @ApiBearerAuth('access-token')
 export class ReportsController {

@@ -1,11 +1,15 @@
-import { Controller, Get, ServiceUnavailableException } from '@nestjs/common';
+import { Controller, Get, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { domainErrors } from '../common/errors/domain-errors';
 import { PrismaService } from '../prisma/prisma.service';
+import { Public } from '../common/decorators/public.decorator';
 
 @Controller('health')
+@Public()
 @ApiTags('Health')
 export class HealthController {
+  private readonly logger = new Logger(HealthController.name);
+
   constructor(private prisma: PrismaService) {}
 
   @Get()
@@ -49,11 +53,14 @@ export class HealthController {
         timestamp: new Date().toISOString(),
       };
     } catch (error: unknown) {
+      this.logger.error(
+        'Health check failed while querying the database.',
+        error instanceof Error ? error.stack : undefined,
+      );
       throw new ServiceUnavailableException({
         status: 'error',
         db: 'down',
-        message:
-          error instanceof Error ? error.message : domainErrors.healthDatabaseUnavailable,
+        message: domainErrors.healthDatabaseUnavailable,
         timestamp: new Date().toISOString(),
       });
     }

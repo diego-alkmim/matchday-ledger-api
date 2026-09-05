@@ -33,12 +33,12 @@ export class AuthService {
 
     const access = await this.jwt.signAsync(
       { sub: user.id, role: user.role as Role, directorId: user.directorId },
-      { secret: this.config.get('JWT_ACCESS_SECRET'), expiresIn: '15m' },
+      { secret: this.config.getOrThrow<string>('JWT_ACCESS_SECRET'), expiresIn: '15m' },
     );
 
     const refreshPayload = { sub: user.id, csrfToken, tid: tokenId };
     const refresh = await this.jwt.signAsync(refreshPayload, {
-      secret: this.config.get('JWT_REFRESH_SECRET'),
+      secret: this.config.getOrThrow<string>('JWT_REFRESH_SECRET'),
       expiresIn: '14d',
     });
 
@@ -63,7 +63,7 @@ export class AuthService {
 
   async refresh(refreshToken: string) {
     const payload = await this.jwt.verifyAsync<RefreshTokenPayload>(refreshToken, {
-      secret: this.config.get('JWT_REFRESH_SECRET'),
+      secret: this.config.getOrThrow<string>('JWT_REFRESH_SECRET'),
     });
 
     const candidates = await this.prisma.refreshToken.findMany({
