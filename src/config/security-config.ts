@@ -11,15 +11,27 @@ export function getCorsOrigins(corsOrigin: string): string[] {
   return origins;
 }
 
+type RuntimeEnvironment = 'development' | 'test' | 'production';
+
+function getRuntimeEnvironment(nodeEnv: string | undefined): RuntimeEnvironment {
+  if (nodeEnv === 'development' || nodeEnv === 'test' || nodeEnv === 'production') {
+    return nodeEnv;
+  }
+
+  throw new Error('NODE_ENV deve ser development, test ou production.');
+}
+
 export function assertProductionAuth(nodeEnv: string | undefined, requireAuth: string | undefined): void {
-  if (nodeEnv === 'production' && requireAuth !== 'true') {
+  if (getRuntimeEnvironment(nodeEnv) === 'production' && requireAuth !== 'true') {
     throw new Error('REQUIRE_AUTH deve ser "true" em produção.');
   }
 }
 
 export function getTrustProxyHops(nodeEnv: string | undefined, value: string | undefined): number {
+  const runtimeEnvironment = getRuntimeEnvironment(nodeEnv);
+
   if (value === undefined || value.trim() === '') {
-    if (nodeEnv === 'production') {
+    if (runtimeEnvironment === 'production') {
       throw new Error('TRUST_PROXY deve ser configurado em produção.');
     }
 
@@ -35,7 +47,7 @@ export function getTrustProxyHops(nodeEnv: string | undefined, value: string | u
     throw new Error('TRUST_PROXY deve ser um número inteiro entre 0 e 5.');
   }
 
-  if (nodeEnv === 'production' && hops === 0) {
+  if (runtimeEnvironment === 'production' && hops === 0) {
     throw new Error('TRUST_PROXY deve ser maior que zero em produção.');
   }
 
@@ -54,7 +66,7 @@ export function getTurnstileConfig(
   secretKey: string | undefined,
   expectedHostname: string | undefined,
 ): TurnstileConfig {
-  if (nodeEnv !== 'production') {
+  if (getRuntimeEnvironment(nodeEnv) !== 'production') {
     return {
       secretKey: secretKey || TURNSTILE_TEST_SECRET_KEY,
       expectedHostname: expectedHostname || 'localhost',

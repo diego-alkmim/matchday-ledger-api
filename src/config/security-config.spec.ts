@@ -30,6 +30,10 @@ describe('security configuration', () => {
     expect(() => assertProductionAuth('production', 'true')).not.toThrow();
   });
 
+  it.each([undefined, 'Production', 'staging'])('rejects an unknown NODE_ENV: %s', (nodeEnv) => {
+    expect(() => assertProductionAuth(nodeEnv, 'true')).toThrow('NODE_ENV');
+  });
+
   it('uses no proxy trust during local development by default', () => {
     expect(getTrustProxyHops('development', undefined)).toBe(0);
   });
