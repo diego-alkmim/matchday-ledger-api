@@ -31,7 +31,7 @@
     "@nestjs/jwt": "^10.0.0",
     "@nestjs/passport": "^10.0.0",
     "@nestjs/platform-express": "^10.0.0",
-    "@nestjs/swagger": "^7.1.19",
+    "@nestjs/swagger": "^12.0.1",
     "@nestjs/throttler": "^5.0.0",
     "@prisma/client": "^5.9.0",
     "argon2": "^0.44.0",
