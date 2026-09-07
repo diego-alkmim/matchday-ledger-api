@@ -18,6 +18,7 @@ import { LoginDto, LoginSchema } from './dto/login.dto';
 import { RefreshDto, RefreshSchema } from './dto/refresh.dto';
 import { AuthService } from './auth.service';
 import { AccessTokenPayload } from './interfaces/access-token-payload.interface';
+import { TurnstileService } from './turnstile.service';
 
 function getRefreshCookie(req: Request): string | undefined {
   const cookies: unknown = req.cookies;
@@ -35,7 +36,10 @@ function getUserAgent(req: Request): string | undefined {
 @Controller('auth')
 @ApiTags('Auth')
 export class AuthController {
-  constructor(private auth: AuthService) {}
+  constructor(
+    private auth: AuthService,
+    private turnstile: TurnstileService,
+  ) {}
 
   @Post('login')
   @Public()
@@ -48,10 +52,11 @@ export class AuthController {
   @ApiBody({
     schema: {
       type: 'object',
-      required: ['email', 'password'],
+      required: ['email', 'password', 'turnstileToken'],
       properties: {
         email: { type: 'string', format: 'email', example: 'admin@santafe.local' },
         password: { type: 'string', minLength: 8, example: 'SenhaForte123!' },
+        turnstileToken: { type: 'string', description: 'Token emitido pelo Cloudflare Turnstile.' },
       },
     },
   })
@@ -61,6 +66,7 @@ export class AuthController {
     @Req() req: Request,
   ) {
     const data = LoginSchema.parse(body);
+    await this.turnstile.verify(data.turnstileToken, req.ip);
     const { user, access, refresh, csrfToken } = await this.auth.login(
       data,
       getUserAgent(req),
