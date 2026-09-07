@@ -20,6 +20,7 @@ import { AccessTokenPayload } from '../auth/interfaces/access-token-payload.inte
 import { CurrentUser } from '../common/decorators/user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
+import { ParseCuidPipe } from '../common/pipes/parse-cuid.pipe';
 import { CreateTransactionDto } from './dto/create-transaction.dto';
 import { UpdateTransactionDto } from './dto/update-transaction.dto';
 import { TransactionsService } from './transactions.service';
@@ -70,7 +71,7 @@ export class TransactionsController {
       'Regras de domínio: não é permitido lançar em jogo fechado; categoria incompatível com o tipo do lançamento; entrada precisa estar vinculada a um diretor; não é permitido trocar o diretor de uma entrada já consolidada.',
   })
   async update(
-    @Param('id') id: string,
+    @Param('id', ParseCuidPipe) id: string,
     @Body() body: UpdateTransactionDto,
     @CurrentUser() user: AccessTokenPayload,
   ) {
@@ -87,7 +88,7 @@ export class TransactionsController {
     status: 403,
     description: 'Não é permitido excluir lançamento de jogo fechado.',
   })
-  remove(@Param('id') id: string) {
+  remove(@Param('id', ParseCuidPipe) id: string) {
     return this.service.remove(id);
   }
 }

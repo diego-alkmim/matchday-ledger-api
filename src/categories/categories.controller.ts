@@ -3,6 +3,7 @@ import { ApiBearerAuth, ApiBody, ApiTags } from '@nestjs/swagger';
 import { Role } from '@prisma/client';
 import { Roles } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
+import { ParseCuidPipe } from '../common/pipes/parse-cuid.pipe';
 import { CreateCategoryDto } from './dto/create-category.dto';
 import { UpdateCategoryDto } from './dto/update-category.dto';
 import { CategoriesService } from './categories.service';
@@ -29,13 +30,13 @@ export class CategoriesController {
   @Roles(Role.ADMIN)
   @Put(':id')
   @ApiBody({ type: UpdateCategoryDto })
-  update(@Param('id') id: string, @Body() body: UpdateCategoryDto) {
+  update(@Param('id', ParseCuidPipe) id: string, @Body() body: UpdateCategoryDto) {
     return this.service.update(id, body);
   }
 
   @Roles(Role.ADMIN)
   @Delete(':id')
-  remove(@Param('id') id: string) {
+  remove(@Param('id', ParseCuidPipe) id: string) {
     return this.service.remove(id);
   }
 }

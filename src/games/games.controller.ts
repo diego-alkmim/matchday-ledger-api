@@ -3,6 +3,7 @@ import { ApiBearerAuth, ApiBody, ApiTags } from '@nestjs/swagger';
 import { Role } from '@prisma/client';
 import { Roles } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
+import { ParseCuidPipe } from '../common/pipes/parse-cuid.pipe';
 import { CreateGameDto } from './dto/create-game.dto';
 import { UpdateGameDto } from './dto/update-game.dto';
 import { GamesService } from './games.service';
@@ -29,25 +30,25 @@ export class GamesController {
   @Roles(Role.ADMIN)
   @Put(':id')
   @ApiBody({ type: UpdateGameDto })
-  update(@Param('id') id: string, @Body() body: UpdateGameDto) {
+  update(@Param('id', ParseCuidPipe) id: string, @Body() body: UpdateGameDto) {
     return this.service.update(id, body);
   }
 
   @Roles(Role.ADMIN)
   @Delete(':id')
-  remove(@Param('id') id: string) {
+  remove(@Param('id', ParseCuidPipe) id: string) {
     return this.service.remove(id);
   }
 
   @Roles(Role.ADMIN)
   @Post(':id/close')
-  close(@Param('id') id: string) {
+  close(@Param('id', ParseCuidPipe) id: string) {
     return this.service.setStatus(id, 'FECHADO');
   }
 
   @Roles(Role.ADMIN)
   @Post(':id/reopen')
-  reopen(@Param('id') id: string) {
+  reopen(@Param('id', ParseCuidPipe) id: string) {
     return this.service.setStatus(id, 'ABERTO');
   }
 }

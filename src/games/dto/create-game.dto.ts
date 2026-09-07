@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { GameStatus } from '@prisma/client';
-import { IsDateString, IsEnum, IsOptional, IsString } from 'class-validator';
+import { IsDateString, IsEnum, IsOptional, IsString, MaxLength } from 'class-validator';
 import { validationMessages } from '../../common/validation/messages';
 
 export class CreateGameDto {
@@ -11,11 +11,13 @@ export class CreateGameDto {
   @ApiPropertyOptional({ example: 'Time X' })
   @IsOptional()
   @IsString({ message: validationMessages.string('opponent') })
+  @MaxLength(160, { message: 'opponent deve ter no máximo 160 caracteres' })
   opponent?: string;
 
   @ApiPropertyOptional({ example: 'Arena Local' })
   @IsOptional()
   @IsString({ message: validationMessages.string('location') })
+  @MaxLength(160, { message: 'location deve ter no máximo 160 caracteres' })
   location?: string;
 
   @ApiProperty({ enum: GameStatus, example: GameStatus.ABERTO })

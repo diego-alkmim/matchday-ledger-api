@@ -3,6 +3,7 @@ import { ApiBearerAuth, ApiBody, ApiTags } from '@nestjs/swagger';
 import { Role } from '@prisma/client';
 import { Roles } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
+import { ParseCuidPipe } from '../common/pipes/parse-cuid.pipe';
 import { CreateDirectorDto } from './dto/create-director.dto';
 import { UpdateDirectorDto } from './dto/update-director.dto';
 import { DirectorsService } from './directors.service';
@@ -29,13 +30,13 @@ export class DirectorsController {
   @Roles(Role.ADMIN)
   @Put(':id')
   @ApiBody({ type: UpdateDirectorDto })
-  update(@Param('id') id: string, @Body() body: UpdateDirectorDto) {
+  update(@Param('id', ParseCuidPipe) id: string, @Body() body: UpdateDirectorDto) {
     return this.service.update(id, body);
   }
 
   @Roles(Role.ADMIN)
   @Delete(':id')
-  remove(@Param('id') id: string) {
+  remove(@Param('id', ParseCuidPipe) id: string) {
     return this.service.remove(id);
   }
 }
