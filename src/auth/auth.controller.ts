@@ -65,7 +65,12 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
     @Req() req: Request,
   ) {
-    const data = LoginSchema.parse(body);
+    const parsed = LoginSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new BadRequestException(domainErrors.invalidPayload);
+    }
+
+    const data = parsed.data;
     await this.turnstile.verify(data.turnstileToken, req.ip);
     const { user, access, refresh, csrfToken } = await this.auth.login(
       data,
@@ -101,7 +106,12 @@ export class AuthController {
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const { csrfToken } = RefreshSchema.parse(body);
+    const parsed = RefreshSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new BadRequestException(domainErrors.invalidPayload);
+    }
+
+    const { csrfToken } = parsed.data;
     const refreshCookie = getRefreshCookie(req);
 
     if (!refreshCookie) {
