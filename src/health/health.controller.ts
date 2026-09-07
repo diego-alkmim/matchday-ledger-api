@@ -1,11 +1,13 @@
 import { Controller, Get, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { SkipThrottle } from '@nestjs/throttler';
 import { domainErrors } from '../common/errors/domain-errors';
 import { PrismaService } from '../prisma/prisma.service';
 import { Public } from '../common/decorators/public.decorator';
 
 @Controller('health')
 @Public()
+@SkipThrottle({ default: true, auth: true })
 @ApiTags('Health')
 export class HealthController {
   private readonly logger = new Logger(HealthController.name);
