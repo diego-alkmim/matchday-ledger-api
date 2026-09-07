@@ -39,7 +39,7 @@ export class AuthController {
 
   @Post('login')
   @Public()
-  @Throttle({ auth: { limit: 5, ttl: 60 } })
+  @Throttle({ auth: { limit: 5, ttl: 60_000 } })
   @ApiOperation({
     summary: 'Login',
     description:
@@ -74,7 +74,7 @@ export class AuthController {
 
   @Post('refresh')
   @Public()
-  @Throttle({ auth: { limit: 5, ttl: 60 } })
+  @Throttle({ auth: { limit: 5, ttl: 60_000 } })
   @ApiCookieAuth('refresh_token')
   @ApiOperation({
     summary: 'Renovar access token',
@@ -114,14 +114,12 @@ export class AuthController {
   }
 
   @Post('logout')
-  @Public()
+  @ApiBearerAuth('access-token')
   async logout(
-    @CurrentUser() user: AccessTokenPayload | undefined,
+    @CurrentUser() user: AccessTokenPayload,
     @Res({ passthrough: true }) res: Response,
   ) {
-    if (user) {
-      await this.auth.logout(user.sub);
-    }
+    await this.auth.logout(user.sub);
     res.clearCookie('refresh_token', { path: '/' });
     return { ok: true };
   }

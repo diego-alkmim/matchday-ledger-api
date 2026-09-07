@@ -9,6 +9,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { LoginDto } from './dto/login.dto';
 import { RefreshTokenPayload } from './interfaces/refresh-token-payload.interface';
 
+type AuthenticatedUser = Pick<User, 'id' | 'email' | 'role' | 'directorId'>;
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -25,6 +27,15 @@ export class AuthService {
     if (!ok) throw new UnauthorizedException(domainErrors.invalidCredentials);
 
     return user;
+  }
+
+  private toAuthenticatedUser(user: User): AuthenticatedUser {
+    return {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      directorId: user.directorId,
+    };
   }
 
   private async generateTokens(user: Pick<User, 'id' | 'role' | 'directorId'>) {
@@ -58,7 +69,7 @@ export class AuthService {
   async login(dto: LoginDto, _userAgent?: string, _ip?: string) {
     const user = await this.validateUser(dto);
     const tokens = await this.generateTokens(user);
-    return { user, ...tokens };
+    return { user: this.toAuthenticatedUser(user), ...tokens };
   }
 
   async refresh(refreshToken: string) {
@@ -91,7 +102,7 @@ export class AuthService {
     });
 
     const tokens = await this.generateTokens(user);
-    return { user, ...tokens };
+    return { user: this.toAuthenticatedUser(user), ...tokens };
   }
 
   async logout(userId: string) {

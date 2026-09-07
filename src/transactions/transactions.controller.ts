@@ -37,6 +37,7 @@ export class TransactionsController {
   }
 
   @Post()
+  @Roles(Role.ADMIN)
   @ApiOperation({
     summary: 'Criar lançamento',
     description:
@@ -56,6 +57,7 @@ export class TransactionsController {
   }
 
   @Put(':id')
+  @Roles(Role.ADMIN)
   @ApiOperation({
     summary: 'Atualizar lançamento',
     description:
