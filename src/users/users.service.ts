@@ -6,8 +6,6 @@ import { CreateUserDto } from './dto/create-user.dto';
 @Injectable()
 export class UsersService {
   constructor(private prisma: PrismaService) {}
-  findById(id: string) { return this.prisma.user.findUnique({ where: { id } }); }
-
   async create(data: CreateUserDto) {
     const passwordHash = await argon2.hash(data.password, { type: argon2.argon2id });
     return this.prisma.user.create({

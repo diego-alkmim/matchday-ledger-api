@@ -1,5 +1,6 @@
 ﻿import { BadRequestException, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 import { ConfigService } from '@nestjs/config';
 import * as cookieParser from 'cookie-parser';
@@ -13,6 +14,8 @@ import { domainErrors } from './common/errors/domain-errors';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import {
   assertProductionAuth,
+  getTurnstileConfig,
+  getTrustProxyHops,
   getSwaggerCredentials,
   getCorsOrigins,
 } from './config/security-config';
@@ -23,11 +26,18 @@ const createCompression = compression as unknown as CompressionFactory;
 const createCookieParser = cookieParser as unknown as CookieParserFactory;
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
   const config = app.get(ConfigService);
   const corsOrigin = config.getOrThrow<string>('CORS_ORIGIN');
   const corsOrigins = getCorsOrigins(corsOrigin);
-  assertProductionAuth(config.get<string>('NODE_ENV'), config.get<string>('REQUIRE_AUTH'));
+  const nodeEnv = config.get<string>('NODE_ENV');
+  assertProductionAuth(nodeEnv, config.get<string>('REQUIRE_AUTH'));
+  getTurnstileConfig(
+    nodeEnv,
+    config.get<string>('TURNSTILE_SECRET_KEY'),
+    config.get<string>('TURNSTILE_EXPECTED_HOSTNAME'),
+  );
+  app.set('trust proxy', getTrustProxyHops(nodeEnv, config.get<string>('TRUST_PROXY')));
 
   app.enableCors({
     origin: corsOrigins,

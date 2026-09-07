@@ -25,12 +25,12 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
         throttlers: [
           {
             name: 'default',
-            ttl: cfg.get<number>('RATE_LIMIT_TTL', 60),
+            ttl: cfg.get<number>('RATE_LIMIT_TTL', 60_000),
             limit: cfg.get<number>('RATE_LIMIT_MAX', 30),
           },
           {
             name: 'auth',
-            ttl: 60,
+            ttl: 60_000,
             limit: 5,
           },
         ],

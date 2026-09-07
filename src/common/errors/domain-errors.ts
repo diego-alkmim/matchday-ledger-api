@@ -1,5 +1,7 @@
 export const domainErrors = {
   invalidCredentials: 'Credenciais inválidas',
+  turnstileInvalid: 'Verificação anti-bot inválida. Tente novamente.',
+  turnstileUnavailable: 'Não foi possível validar a verificação anti-bot. Tente novamente.',
   invalidCsrf: 'CSRF inválido',
   refreshTokenMissing: 'Refresh token não informado',
   gameNotFound: 'Jogo não encontrado',

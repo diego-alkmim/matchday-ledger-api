@@ -36,7 +36,22 @@ export class TransactionsService {
 
   list() {
     return this.prisma.transaction.findMany({
-      include: { game: true, category: true, director: true },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        type: true,
+        amount: true,
+        date: true,
+        paymentMethod: true,
+        notes: true,
+        gameId: true,
+        categoryId: true,
+        directorId: true,
+        createdAt: true,
+        game: { select: { id: true, date: true, opponent: true } },
+        category: { select: { id: true, name: true, type: true } },
+        director: { select: { id: true, name: true } },
+      },
     });
   }
 
