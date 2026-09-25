@@ -1,9 +1,17 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
-import { CategoryType, GameStatus, Role, TransactionType } from '@prisma/client';
+import {
+  CategoryType,
+  GameStatus,
+  Prisma,
+  Role,
+  TransactionType,
+} from '@prisma/client';
 import { AccessTokenPayload } from '../auth/interfaces/access-token-payload.interface';
+import { buildPaginationMeta } from '../common/dto/pagination.dto';
 import { domainErrors } from '../common/errors/domain-errors';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateTransactionDto } from './dto/create-transaction.dto';
+import { ListTransactionsQueryDto } from './dto/list-transactions-query.dto';
 import { UpdateTransactionDto } from './dto/update-transaction.dto';
 
 @Injectable()
@@ -34,25 +42,62 @@ export class TransactionsService {
     }
   }
 
-  list() {
-    return this.prisma.transaction.findMany({
-      orderBy: { createdAt: 'desc' },
-      select: {
-        id: true,
-        type: true,
-        amount: true,
-        date: true,
-        paymentMethod: true,
-        notes: true,
-        gameId: true,
-        categoryId: true,
-        directorId: true,
-        createdAt: true,
-        game: { select: { id: true, date: true, opponent: true } },
-        category: { select: { id: true, name: true, type: true } },
-        director: { select: { id: true, name: true } },
-      },
-    });
+  async list(query: ListTransactionsQueryDto) {
+    const paginated = query.page !== undefined || query.pageSize !== undefined;
+    const page = query.page ?? 1;
+    const pageSize = query.pageSize ?? 20;
+    const where: Prisma.TransactionWhereInput = {
+      ...(query.gameId ? { gameId: query.gameId } : {}),
+      ...(query.categoryId ? { categoryId: query.categoryId } : {}),
+      ...(query.directorId ? { directorId: query.directorId } : {}),
+      ...(query.type ? { type: query.type } : {}),
+      ...(query.from || query.to
+        ? {
+            createdAt: {
+              ...(query.from
+                ? { gte: new Date(`${query.from}T00:00:00.000Z`) }
+                : {}),
+              ...(query.to
+                ? { lte: new Date(`${query.to}T23:59:59.999Z`) }
+                : {}),
+            },
+          }
+        : {}),
+    };
+    const select = {
+      id: true,
+      type: true,
+      amount: true,
+      date: true,
+      paymentMethod: true,
+      notes: true,
+      gameId: true,
+      categoryId: true,
+      directorId: true,
+      createdAt: true,
+      game: { select: { id: true, date: true, opponent: true } },
+      category: { select: { id: true, name: true, type: true } },
+      director: { select: { id: true, name: true } },
+    } satisfies Prisma.TransactionSelect;
+    const findManyArgs = {
+      where,
+      orderBy: { createdAt: 'desc' } as const,
+      select,
+      ...(paginated
+        ? { skip: (page - 1) * pageSize, take: pageSize }
+        : {}),
+    };
+
+    if (!paginated) {
+      return this.prisma.transaction.findMany(findManyArgs);
+    }
+
+    const [items, total] = await this.prisma.$transaction([
+      this.prisma.transaction.findMany(findManyArgs),
+      this.prisma.transaction.count({ where }),
+    ]);
+
+    return { items, pagination: buildPaginationMeta(page, pageSize, total) };
   }
 
   async create(data: CreateTransactionDto, user: AccessTokenPayload) {

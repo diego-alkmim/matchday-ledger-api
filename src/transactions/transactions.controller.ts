@@ -5,6 +5,7 @@ import {
   Get,
   Param,
   Post,
+  Query,
   Put,
   UseGuards,
 } from '@nestjs/common';
@@ -22,6 +23,7 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { ParseCuidPipe } from '../common/pipes/parse-cuid.pipe';
 import { CreateTransactionDto } from './dto/create-transaction.dto';
+import { ListTransactionsQueryDto } from './dto/list-transactions-query.dto';
 import { UpdateTransactionDto } from './dto/update-transaction.dto';
 import { TransactionsService } from './transactions.service';
 
@@ -33,8 +35,13 @@ export class TransactionsController {
   constructor(private service: TransactionsService) {}
 
   @Get()
-  list() {
-    return this.service.list();
+  @ApiOperation({
+    summary: 'Listar lancamentos',
+    description:
+      'Com page ou pageSize, retorna itens e metadados de paginacao. Os filtros opcionais sao aplicados antes da paginacao.',
+  })
+  list(@Query() query: ListTransactionsQueryDto) {
+    return this.service.list(query);
   }
 
   @Post()

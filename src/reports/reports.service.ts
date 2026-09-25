@@ -1,6 +1,12 @@
-﻿import { Injectable } from "@nestjs/common";
-import { PrismaService } from "../prisma/prisma.service";
-import { buildDirectorConsolidation, groupPaymentsByDirector } from "./director-consolidation";
+import { Injectable } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
+import { buildPaginationMeta } from '../common/dto/pagination.dto';
+import { PrismaService } from '../prisma/prisma.service';
+import {
+  buildDirectorConsolidation,
+  groupPaymentsByDirector,
+} from './director-consolidation';
+import { AnalyticalByGameQueryDto } from './dto/analytical-by-game-query.dto';
 
 @Injectable()
 export class ReportsService {
@@ -8,7 +14,7 @@ export class ReportsService {
 
   byGame(gameId: string) {
     return this.prisma.transaction.groupBy({
-      by: ["type"],
+      by: ['type'],
       where: { gameId },
       _sum: { amount: true },
     });
@@ -38,47 +44,107 @@ export class ReportsService {
     `;
   }
 
-  async analyticalByGame(from?: string, to?: string, gameId?: string) {
-    const transactionWhere = {
-      ...(gameId ? { gameId } : {}),
-      ...(from || to ? { createdAt: { ...(from ? { gte: new Date(`${from}T00:00:00.000Z`) } : {}), ...(to ? { lte: new Date(`${to}T23:59:59.999Z`) } : {}) } } : {}),
+  async analyticalByGame(query: AnalyticalByGameQueryDto) {
+    const paginated = query.page !== undefined || query.pageSize !== undefined;
+    const page = query.page ?? 1;
+    const pageSize = query.pageSize ?? 20;
+    const transactionWhere: Prisma.TransactionWhereInput = {
+      ...(query.from || query.to
+        ? {
+            createdAt: {
+              ...(query.from
+                ? { gte: new Date(`${query.from}T00:00:00.000Z`) }
+                : {}),
+              ...(query.to
+                ? { lte: new Date(`${query.to}T23:59:59.999Z`) }
+                : {}),
+            },
+          }
+        : {}),
     };
-    const transactions = await this.prisma.transaction.findMany({
-      where: transactionWhere,
-      orderBy: [{ game: { date: "desc" } }, { createdAt: "desc" }],
-      include: { game: true, category: true, director: true },
-    });
-    const grouped = new Map<string, { game: { id: string; date: Date; opponent: string | null; location: string | null; status: string }; transactions: Array<{ id: string; type: string; amount: number; paymentMethod: string; notes: string | null; createdAt: Date; date: Date; category: string | null; categoryType: string | null; director: string | null }> }>();
+    const gameWhere: Prisma.GameWhereInput = query.gameId
+      ? { id: query.gameId, transactions: { some: transactionWhere } }
+      : { transactions: { some: transactionWhere } };
+    const findManyArgs = {
+      where: gameWhere,
+      orderBy: { date: 'desc' } as const,
+      ...(paginated
+        ? { skip: (page - 1) * pageSize, take: pageSize }
+        : {}),
+      select: {
+          id: true,
+          date: true,
+          opponent: true,
+          location: true,
+          status: true,
+          transactions: {
+            where: transactionWhere,
+            orderBy: { createdAt: 'desc' as const },
+            select: {
+              id: true,
+              type: true,
+              amount: true,
+              paymentMethod: true,
+              notes: true,
+              createdAt: true,
+              date: true,
+              category: { select: { name: true, type: true } },
+              director: { select: { name: true } },
+            },
+          },
+      },
+    } satisfies Prisma.GameFindManyArgs;
+    const games = await this.prisma.game.findMany(findManyArgs);
+    const total = paginated
+      ? await this.prisma.game.count({ where: gameWhere })
+      : 0;
+    const items = games.map((game) => {
+      const transactions = game.transactions.map((transaction) => ({
+        id: transaction.id,
+        type: transaction.type,
+        amount: Number(transaction.amount),
+        paymentMethod: transaction.paymentMethod,
+        notes: transaction.notes,
+        createdAt: transaction.createdAt,
+        date: transaction.date,
+        category: transaction.category?.name ?? null,
+        categoryType: transaction.category?.type ?? null,
+        director: transaction.director?.name ?? null,
+      }));
+      const entradas = transactions
+        .filter((transaction) => transaction.type === 'ENTRADA')
+        .reduce((sum, transaction) => sum + transaction.amount, 0);
+      const saidas = transactions
+        .filter((transaction) => transaction.type === 'SAIDA')
+        .reduce((sum, transaction) => sum + transaction.amount, 0);
 
-    for (const transaction of transactions) {
-      const entry = grouped.get(transaction.gameId) ?? {
-        game: { id: transaction.game.id, date: transaction.game.date, opponent: transaction.game.opponent, location: transaction.game.location, status: transaction.game.status },
-        transactions: [],
+      return {
+        game: {
+          id: game.id,
+          date: game.date,
+          opponent: game.opponent,
+          location: game.location,
+          status: game.status,
+        },
+        totals: { entradas, saidas, saldo: entradas - saidas },
+        transactions,
       };
-      entry.transactions.push({
-        id: transaction.id, type: transaction.type, amount: Number(transaction.amount), paymentMethod: transaction.paymentMethod,
-        notes: transaction.notes, createdAt: transaction.createdAt, date: transaction.date,
-        category: transaction.category?.name ?? null, categoryType: transaction.category?.type ?? null, director: transaction.director?.name ?? null,
-      });
-      grouped.set(transaction.gameId, entry);
-    }
-
-    return Array.from(grouped.values()).map((entry) => {
-      const entradas = entry.transactions.filter((transaction) => transaction.type === "ENTRADA").reduce((sum, transaction) => sum + transaction.amount, 0);
-      const saidas = entry.transactions.filter((transaction) => transaction.type === "SAIDA").reduce((sum, transaction) => sum + transaction.amount, 0);
-      return { game: entry.game, totals: { entradas, saidas, saldo: entradas - saidas }, transactions: entry.transactions };
     });
+
+    return paginated
+      ? { items, pagination: buildPaginationMeta(page, pageSize, total) }
+      : items;
   }
 
   async consolidatedByDirector(from?: string, to?: string, expectedPerGame = 70) {
     const dateFilter = from || to ? { createdAt: { ...(from ? { gte: new Date(`${from}T00:00:00.000Z`) } : {}), ...(to ? { lte: new Date(`${to}T23:59:59.999Z`) } : {}) } } : {};
     const [games, directors, paymentsRaw] = await Promise.all([
-      this.prisma.game.findMany({ where: dateFilter, orderBy: { date: "asc" }, select: { id: true, date: true, opponent: true, location: true } }),
-      this.prisma.director.findMany({ where: { active: true }, orderBy: { name: "asc" }, select: { id: true, name: true, contact: true } }),
+      this.prisma.game.findMany({ where: dateFilter, orderBy: { date: 'asc' }, select: { id: true, date: true, opponent: true, location: true } }),
+      this.prisma.director.findMany({ where: { active: true }, orderBy: { name: 'asc' }, select: { id: true, name: true, contact: true } }),
       this.prisma.transaction.findMany({
-        where: { type: "ENTRADA", category: { name: "Diretoria" }, ...dateFilter },
+        where: { type: 'ENTRADA', category: { name: 'Diretoria' }, ...dateFilter },
         include: { game: { select: { id: true, date: true, opponent: true, location: true } }, category: { select: { name: true, type: true } } },
-        orderBy: { createdAt: "desc" },
+        orderBy: { createdAt: 'desc' },
       }),
     ]);
     const paymentsByDirector = groupPaymentsByDirector(directors, paymentsRaw);

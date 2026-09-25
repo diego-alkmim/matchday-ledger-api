@@ -33,7 +33,7 @@ export class ReportsController {
   @ApiQuery({ name: 'to', required: false, example: '2026-02-29' })
   @ApiQuery({ name: 'gameId', required: false, example: 'cuid-do-jogo' })
   analyticalByGame(@Query() query: AnalyticalByGameQueryDto) {
-    return this.service.analyticalByGame(query.from, query.to, query.gameId);
+    return this.service.analyticalByGame(query);
   }
 
   @Get('consolidated-by-director')
