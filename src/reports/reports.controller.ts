@@ -42,19 +42,17 @@ export class ReportsController {
   }
 
   @Get('consolidated-by-director')
-  @ApiOperation({ summary: 'Relatório consolidado por diretor' })
+  @ApiOperation({
+    summary: 'Relatório consolidado por diretor',
+    description:
+      'Calcula automaticamente as obrigações pela regra do time: valor de cada jogo ou valor mensal configurado.',
+  })
   @ApiQuery({ name: 'from', required: false, example: '2026-02-01' })
   @ApiQuery({ name: 'to', required: false, example: '2026-02-29' })
-  @ApiQuery({ name: 'expectedPerGame', required: false, example: 70 })
   consolidatedByDirector(
     @Query() query: ConsolidatedByDirectorQueryDto,
     @CurrentUser() user: AccessTokenPayload,
   ) {
-    return this.service.consolidatedByDirector(
-      query.from,
-      query.to,
-      query.expectedPerGame ?? 70,
-      user.teamId,
-    );
+    return this.service.consolidatedByDirector(query.from, query.to, user.teamId);
   }
 }

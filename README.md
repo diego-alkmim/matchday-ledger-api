@@ -43,3 +43,14 @@ npm run team:create -- --name "Nome do Time" --slug nome-do-time --admin-email a
 ```
 
 Se o e-mail já existir, a identidade é reutilizada e a senha informada não é alterada. A senha também pode ser fornecida por `TEAM_ADMIN_PASSWORD` para evitar registrá-la no histórico do shell.
+
+## Contribuição dos diretores
+- Cada time escolhe entre contribuição `PER_GAME` e `MONTHLY`.
+- No modo por jogo, cada partida guarda seu próprio valor esperado por diretor.
+- No modo mensal, existe uma obrigação por mês que possua ao menos um jogo no período consultado.
+- A migração de contribuição preenche todos os jogos anteriores com o valor histórico de R$ 70,00.
+- O relatório consolidado obtém os valores do banco e não aceita mais um valor manual no filtro.
+
+## Backlog de segurança
+- Avaliar Row-Level Security (RLS) no PostgreSQL como segunda camada de isolamento por time.
+- A implementação deverá usar contexto transacional (`SET LOCAL`) devido ao pool de conexões, além de uma conexão administrativa separada para migrações e rotinas operacionais.

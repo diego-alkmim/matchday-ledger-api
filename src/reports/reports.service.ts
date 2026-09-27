@@ -1,12 +1,33 @@
 import { Injectable } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { ContributionMode, Prisma } from '@prisma/client';
 import { buildPaginationMeta } from '../common/dto/pagination.dto';
 import { PrismaService } from '../prisma/prisma.service';
 import {
+  buildContributionObligations,
   buildDirectorConsolidation,
   groupPaymentsByDirector,
 } from './director-consolidation';
 import { AnalyticalByGameQueryDto } from './dto/analytical-by-game-query.dto';
+
+function buildContributionDateFilter(
+  from: string | undefined,
+  to: string | undefined,
+  mode: ContributionMode,
+): Prisma.DateTimeFilter | undefined {
+  if (!from && !to) return undefined;
+  let start = from ? new Date(`${from}T00:00:00.000-03:00`) : undefined;
+  let end = to ? new Date(`${to}T23:59:59.999-03:00`) : undefined;
+
+  if (mode === ContributionMode.MONTHLY) {
+    if (from) start = new Date(`${from.slice(0, 7)}-01T00:00:00.000-03:00`);
+    if (to) {
+      const [year, month] = to.split('-').map(Number);
+      end = new Date(Date.UTC(year, month, 1, 3) - 1);
+    }
+  }
+
+  return { ...(start ? { gte: start } : {}), ...(end ? { lte: end } : {}) };
+}
 
 @Injectable()
 export class ReportsService {
@@ -144,25 +165,68 @@ export class ReportsService {
   async consolidatedByDirector(
     from: string | undefined,
     to: string | undefined,
-    expectedPerGame: number,
     teamId: string,
   ) {
-    const dateFilter = from || to ? { createdAt: { ...(from ? { gte: new Date(`${from}T00:00:00.000Z`) } : {}), ...(to ? { lte: new Date(`${to}T23:59:59.999Z`) } : {}) } } : {};
+    const team = await this.prisma.team.findUniqueOrThrow({
+      where: { id: teamId },
+      select: { contributionMode: true, monthlyContributionPerDirector: true },
+    });
+    const gameDateFilter = buildContributionDateFilter(from, to, team.contributionMode);
     const [games, directors, paymentsRaw] = await Promise.all([
-      this.prisma.game.findMany({ where: { teamId, ...dateFilter }, orderBy: { date: 'asc' }, select: { id: true, date: true, opponent: true, location: true } }),
+      this.prisma.game.findMany({
+        where: { teamId, ...(gameDateFilter ? { date: gameDateFilter } : {}) },
+        orderBy: { date: 'asc' },
+        select: {
+          id: true,
+          date: true,
+          opponent: true,
+          location: true,
+          expectedContributionPerDirector: true,
+        },
+      }),
       this.prisma.director.findMany({ where: { teamId, active: true }, orderBy: { name: 'asc' }, select: { id: true, name: true, contact: true } }),
       this.prisma.transaction.findMany({
-        where: { teamId, type: 'ENTRADA', category: { name: 'Diretoria' }, ...dateFilter },
+        where: {
+          teamId,
+          type: 'ENTRADA',
+          category: { name: 'Diretoria' },
+          ...(gameDateFilter ? { game: { date: gameDateFilter } } : {}),
+        },
         include: { game: { select: { id: true, date: true, opponent: true, location: true } }, category: { select: { name: true, type: true } } },
         orderBy: { createdAt: 'desc' },
       }),
     ]);
+    const monthlyContributionPerDirector = Number(team.monthlyContributionPerDirector);
+    const obligations = buildContributionObligations(
+      games,
+      team.contributionMode,
+      monthlyContributionPerDirector,
+    );
     const paymentsByDirector = groupPaymentsByDirector(directors, paymentsRaw);
+    const expectedTotalPerDirector =
+      Math.round(
+        obligations.reduce((sum, obligation) => sum + obligation.expectedAmount, 0) * 100,
+      ) / 100;
 
     return {
-      summary: { gamesCount: games.length, expectedPerGame, expectedTotalPerDirector: games.length * expectedPerGame },
+      summary: {
+        mode: team.contributionMode,
+        gamesCount: games.length,
+        obligationsCount: obligations.length,
+        monthlyContributionPerDirector:
+          team.contributionMode === 'MONTHLY' ? monthlyContributionPerDirector : null,
+        expectedTotalPerDirector,
+      },
       games,
-      directors: directors.map((director) => buildDirectorConsolidation(director, games, paymentsByDirector.get(director.id) ?? [], expectedPerGame)),
+      obligations,
+      directors: directors.map((director) =>
+        buildDirectorConsolidation(
+          director,
+          obligations,
+          paymentsByDirector.get(director.id) ?? [],
+          team.contributionMode,
+        ),
+      ),
     };
   }
 }

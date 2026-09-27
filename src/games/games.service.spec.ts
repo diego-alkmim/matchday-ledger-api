@@ -24,7 +24,11 @@ describe('GamesService tenant isolation', () => {
   it('stamps the active team when creating a game', async () => {
     create.mockResolvedValue({ id: 'game-1' });
     await service.create(
-      { date: '2026-09-26T12:00:00.000Z', status: GameStatus.ABERTO },
+      {
+        date: '2026-09-26T12:00:00.000Z',
+        status: GameStatus.ABERTO,
+        expectedContributionPerDirector: 70,
+      },
       'team-1',
     );
     expect(create).toHaveBeenCalled();
