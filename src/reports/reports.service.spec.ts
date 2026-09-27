@@ -4,9 +4,16 @@ import { ReportsService } from './reports.service';
 describe('ReportsService', () => {
   const findMany = jest.fn<Promise<unknown[]>, [unknown]>();
   const count = jest.fn();
+  const groupBy = jest.fn<Promise<unknown[]>, [unknown]>();
+  const transactionFindMany = jest.fn<Promise<unknown[]>, [unknown]>();
+  const directorFindMany = jest.fn<Promise<unknown[]>, [unknown]>();
+  const queryRaw = jest.fn<Promise<unknown[]>, unknown[]>();
   const transaction = jest.fn((operations: Promise<unknown>[]) => Promise.all(operations));
   const prisma = {
     game: { findMany, count },
+    transaction: { groupBy, findMany: transactionFindMany },
+    director: { findMany: directorFindMany },
+    $queryRaw: queryRaw,
     $transaction: transaction,
   } as unknown as PrismaService;
   const service = new ReportsService(prisma);
@@ -64,5 +71,38 @@ describe('ReportsService', () => {
 
     await expect(service.analyticalByGame({}, 'team-1')).resolves.toEqual([]);
     expect(count).not.toHaveBeenCalled();
+  });
+
+  it('scopes every summary report to the active team', async () => {
+    groupBy.mockResolvedValue([]);
+    queryRaw.mockResolvedValue([]);
+
+    await service.byGame('game-1', 'team-1');
+    await service.monthly('2026-01-01', '2026-12-31', 'team-1');
+    await service.byCategory('2026-01-01', '2026-12-31', 'team-1');
+
+    const groupArgs = groupBy.mock.calls[0]?.[0] as { where: Record<string, unknown> };
+    expect(groupArgs.where).toEqual({ gameId: 'game-1', teamId: 'team-1' });
+    expect(queryRaw.mock.calls[0]).toContain('team-1');
+    expect(queryRaw.mock.calls[1]).toContain('team-1');
+  });
+
+  it('scopes director consolidation sources to the same active team', async () => {
+    findMany.mockResolvedValue([]);
+    directorFindMany.mockResolvedValue([]);
+    transactionFindMany.mockResolvedValue([]);
+
+    await service.consolidatedByDirector(undefined, undefined, 70, 'team-2');
+
+    const gameArgs = findMany.mock.calls[0]?.[0] as { where: Record<string, unknown> };
+    const directorArgs = directorFindMany.mock.calls[0]?.[0] as {
+      where: Record<string, unknown>;
+    };
+    const paymentArgs = transactionFindMany.mock.calls[0]?.[0] as {
+      where: Record<string, unknown>;
+    };
+    expect(gameArgs.where.teamId).toBe('team-2');
+    expect(directorArgs.where.teamId).toBe('team-2');
+    expect(paymentArgs.where.teamId).toBe('team-2');
   });
 });
