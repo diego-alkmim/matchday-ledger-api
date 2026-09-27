@@ -34,71 +34,131 @@ enum CategoryType {
 }
 
 model User {
-  id           String   @id @default(cuid())
-  email        String   @unique
+  id           String           @id @default(cuid())
+  email        String           @unique
   passwordHash String
-  role         Role
-  director     Director? @relation("DirectorUser", fields: [directorId], references: [id])
-  directorId   String?   @unique
-  refreshTokens RefreshToken[]
-  createdAt    DateTime @default(now())
-  transactions Transaction[] @relation("TransactionsCreated")
+  memberships  TeamMembership[]
+  createdAt    DateTime         @default(now())
+}
+
+model Team {
+  id           String           @id @default(cuid())
+  name         String
+  slug         String           @unique
+  active       Boolean          @default(true)
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+  memberships  TeamMembership[]
+  directors    Director[]
+  games        Game[]
+  categories   Category[]
+  transactions Transaction[]
+}
+
+model TeamMembership {
+  id                  String         @id @default(cuid())
+  user                User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId              String
+  team                Team           @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  teamId              String
+  role                Role
+  director            Director?      @relation(fields: [directorId, teamId], references: [id, teamId], onDelete: Restrict)
+  directorId          String?
+  active              Boolean        @default(true)
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+  transactionsCreated Transaction[]  @relation("TransactionsCreatedByMembership")
+  refreshTokens       RefreshToken[]
+
+  @@unique([userId, teamId])
+  @@unique([teamId, directorId])
+  @@index([teamId, role])
 }
 
 model Director {
-  id       String   @id @default(cuid())
-  name     String   @unique
-  contact  String?
-  active   Boolean  @default(true)
-  user     User?    @relation("DirectorUser")
+  id           String           @id @default(cuid())
+  team         Team             @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  teamId       String
+  name         String
+  contact      String?
+  active       Boolean          @default(true)
+  memberships  TeamMembership[]
   transactions Transaction[]
+
+  @@unique([teamId, name])
+  @@unique([id, teamId])
+  @@index([teamId, active])
 }
 
 model Game {
-  id        String    @id @default(cuid())
-  date      DateTime
-  location  String?
-  opponent  String?
-  status    GameStatus @default(ABERTO)
-  createdAt DateTime  @default(now())
+  id           String        @id @default(cuid())
+  team         Team          @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  teamId       String
+  date         DateTime
+  location     String?
+  opponent     String?
+  status       GameStatus    @default(ABERTO)
+  createdAt    DateTime      @default(now())
   transactions Transaction[]
+
+  @@unique([id, teamId])
+  @@index([teamId, date])
+  @@index([teamId, status])
 }
 
 model Category {
-  id      String  @id @default(cuid())
-  name    String  @unique
-  type    CategoryType @default(ENTRADA)
-  active  Boolean @default(true)
+  id           String        @id @default(cuid())
+  team         Team          @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  teamId       String
+  name         String
+  type         CategoryType  @default(ENTRADA)
+  active       Boolean       @default(true)
   transactions Transaction[]
+
+  @@unique([teamId, name])
+  @@unique([id, teamId])
+  @@index([teamId, active])
 }
 
 model Transaction {
-  id              String          @id @default(cuid())
-  type            TransactionType
-  amount          Decimal         @db.Decimal(10, 2)
-  date            DateTime
-  paymentMethod   PaymentMethod
-  notes           String?
-  game            Game            @relation(fields: [gameId], references: [id])
-  gameId          String
-  category        Category        @relation(fields: [categoryId], references: [id])
-  categoryId      String
-  director        Director?       @relation(fields: [directorId], references: [id])
-  directorId      String?
-  createdByUser   User            @relation("TransactionsCreated", fields: [createdByUserId], references: [id])
-  createdByUserId String
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
+  id                  String          @id @default(cuid())
+  team                Team            @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  teamId              String
+  type                TransactionType
+  amount              Decimal         @db.Decimal(10, 2)
+  date                DateTime
+  paymentMethod       PaymentMethod
+  notes               String?
+  game                Game            @relation(fields: [gameId, teamId], references: [id, teamId])
+  gameId              String
+  category            Category        @relation(fields: [categoryId, teamId], references: [id, teamId])
+  categoryId          String
+  director            Director?       @relation(fields: [directorId, teamId], references: [id, teamId], onDelete: Restrict)
+  directorId          String?
+  createdByMembership TeamMembership  @relation("TransactionsCreatedByMembership", fields: [createdByUserId, teamId], references: [userId, teamId])
+  createdByUserId     String
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+
+  @@unique([id, teamId])
+  @@index([teamId, createdAt])
+  @@index([teamId, gameId])
+  @@index([teamId, categoryId])
+  @@index([teamId, directorId])
 }
 
 model RefreshToken {
-  id         String   @id @default(cuid())
+  id         String         @id @default(cuid())
   tokenHash  String
-  user       User     @relation(fields: [userId], references: [id])
   userId     String
+  teamId     String
+  membership TeamMembership @relation(fields: [userId, teamId], references: [userId, teamId], onDelete: Cascade)
   expiresAt  DateTime
   revokedAt  DateTime?
   userAgent  String?
   ip         String?
-  createdAt  DateTime @default(now())
+  createdAt  DateTime       @default(now())
+
+  @@index([userId, revokedAt])
+  @@index([teamId])
 }

@@ -16,6 +16,12 @@ import { CurrentUser } from '../common/decorators/user.decorator';
 import { Public } from '../common/decorators/public.decorator';
 import { LoginDto, LoginSchema } from './dto/login.dto';
 import { RefreshDto, RefreshSchema } from './dto/refresh.dto';
+import {
+  SelectTeamDto,
+  SelectTeamSchema,
+  SwitchTeamDto,
+  SwitchTeamSchema,
+} from './dto/select-team.dto';
 import { AuthService } from './auth.service';
 import { AccessTokenPayload } from './interfaces/access-token-payload.interface';
 import { TurnstileService } from './turnstile.service';
@@ -72,15 +78,54 @@ export class AuthController {
 
     const data = parsed.data;
     await this.turnstile.verify(data.turnstileToken, req.ip);
-    const { user, access, refresh, csrfToken } = await this.auth.login(
+    const result = await this.auth.login(
       data,
       getUserAgent(req),
       req.ip,
     );
 
-    this.setRefreshCookie(res, refresh);
-    res.setHeader('x-csrf-token', csrfToken);
-    return { accessToken: access, user, csrfToken };
+    if ('teamSelectionToken' in result) {
+      return result;
+    }
+
+    return this.applySession(res, result);
+  }
+
+  @Post('select-team')
+  @Public()
+  @Throttle({ auth: { limit: 10, ttl: 60_000 } })
+  @ApiOperation({ summary: 'Selecionar time após o login' })
+  async selectTeam(
+    @Body() body: SelectTeamDto,
+    @Res({ passthrough: true }) res: Response,
+    @Req() req: Request,
+  ) {
+    const parsed = SelectTeamSchema.safeParse(body);
+    if (!parsed.success) throw new BadRequestException(domainErrors.invalidPayload);
+
+    const result = await this.auth.selectTeam(
+      parsed.data.teamSelectionToken,
+      parsed.data.teamId,
+      getUserAgent(req),
+      req.ip,
+    );
+    return this.applySession(res, result);
+  }
+
+  @Post('switch-team')
+  @ApiBearerAuth('access-token')
+  @ApiOperation({ summary: 'Trocar o time ativo da sessão' })
+  async switchTeam(
+    @Body() body: SwitchTeamDto,
+    @CurrentUser() user: AccessTokenPayload,
+    @Res({ passthrough: true }) res: Response,
+    @Req() req: Request,
+  ) {
+    const parsed = SwitchTeamSchema.safeParse(body);
+    if (!parsed.success) throw new BadRequestException(domainErrors.invalidPayload);
+
+    const result = await this.auth.switchTeam(user, parsed.data.teamId, getUserAgent(req), req.ip);
+    return this.applySession(res, result);
   }
 
   @Post('refresh')
@@ -118,15 +163,12 @@ export class AuthController {
       throw new BadRequestException(domainErrors.refreshTokenMissing);
     }
 
-    const payload = await this.auth.refresh(refreshCookie);
-
     if (csrfToken !== req.headers['x-csrf-token']) {
       throw new ForbiddenException(domainErrors.invalidCsrf);
     }
 
-    this.setRefreshCookie(res, payload.refresh);
-    res.setHeader('x-csrf-token', payload.csrfToken);
-    return { accessToken: payload.access, user: payload.user, csrfToken: payload.csrfToken };
+    const payload = await this.auth.refresh(refreshCookie, csrfToken);
+    return this.applySession(res, payload);
   }
 
   @Post('logout')
@@ -135,15 +177,24 @@ export class AuthController {
     @CurrentUser() user: AccessTokenPayload,
     @Res({ passthrough: true }) res: Response,
   ) {
-    await this.auth.logout(user.sub);
+    await this.auth.logout(user);
     res.clearCookie('refresh_token', { path: '/' });
     return { ok: true };
   }
 
   @Get('me')
   @ApiBearerAuth('access-token')
-  me(@CurrentUser() user: AccessTokenPayload) {
-    return user;
+  async me(@CurrentUser() user: AccessTokenPayload) {
+    return this.auth.getCurrentUser(user);
+  }
+
+  private applySession(
+    res: Response,
+    payload: { access: string; refresh: string; csrfToken: string; user: unknown },
+  ) {
+    this.setRefreshCookie(res, payload.refresh);
+    res.setHeader('x-csrf-token', payload.csrfToken);
+    return { accessToken: payload.access, user: payload.user, csrfToken: payload.csrfToken };
   }
 
   private setRefreshCookie(res: Response, token: string) {

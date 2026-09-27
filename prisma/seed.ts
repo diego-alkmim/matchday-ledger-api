@@ -1,63 +1,76 @@
-﻿import { PrismaClient, Role, CategoryType } from '@prisma/client';
+import { CategoryType, PrismaClient, Role } from '@prisma/client';
 import { hash } from 'argon2';
 
 const prisma = new PrismaClient();
 
+const initialCategories = [
+  { name: 'Diretoria', type: CategoryType.ENTRADA },
+  { name: 'Uber', type: CategoryType.SAIDA },
+  { name: 'Jogador', type: CategoryType.SAIDA },
+  { name: 'Resenha', type: CategoryType.SAIDA },
+  { name: 'Arbitragem', type: CategoryType.SAIDA },
+];
+
 async function main() {
-  const categories = [
-    { name: 'Arbitragem', type: CategoryType.SAIDA },
-    { name: 'Jogador', type: CategoryType.SAIDA },
-    { name: 'Lavagem', type: CategoryType.SAIDA },
-    { name: 'Churrasco', type: CategoryType.SAIDA },
-    { name: 'Resenha', type: CategoryType.SAIDA },
-    { name: 'Uniforme', type: CategoryType.SAIDA },
-    { name: 'Entrada Diretores', type: CategoryType.ENTRADA },
-  ];
-  for (const category of categories) {
+  const team = await prisma.team.upsert({
+    where: { slug: 'santa-fe' },
+    update: { name: 'Santa Fé', active: true },
+    create: { name: 'Santa Fé', slug: 'santa-fe' },
+  });
+
+  for (const category of initialCategories) {
     await prisma.category.upsert({
-      where: { name: category.name },
-      update: { type: category.type },
-      create: category,
+      where: { teamId_name: { teamId: team.id, name: category.name } },
+      update: { type: category.type, active: true },
+      create: { ...category, teamId: team.id },
     });
   }
 
   const directors = ['Tiaguinho', 'Chokito', 'Andy', 'Bola', 'Diego'];
-  const directorIds: Record<string, string> = {};
+  const directorIds = new Map<string, string>();
   for (const name of directors) {
     const director = await prisma.director.upsert({
-      where: { name },
-      update: {},
-      create: { name, active: true, contact: '' },
+      where: { teamId_name: { teamId: team.id, name } },
+      update: { active: true },
+      create: { teamId: team.id, name, active: true, contact: '' },
     });
-    directorIds[name] = director.id;
+    directorIds.set(name.toLowerCase(), director.id);
   }
 
   const adminPass = await hash('Admin#123456');
   const dirPass = await hash('Diretor#123456');
-
-  await prisma.user.upsert({
+  const admin = await prisma.user.upsert({
     where: { email: 'admin@santafe.local' },
     update: {},
-    create: {
-      email: 'admin@santafe.local',
-      passwordHash: adminPass,
-      role: Role.ADMIN,
-    },
+    create: { email: 'admin@santafe.local', passwordHash: adminPass },
   });
 
-  const dirEmails = ['tiaguinho', 'chokito', 'andy', 'bola', 'diego'];
-  for (const name of dirEmails) {
-    const directorName = directors.find((director) => director.toLowerCase() === name);
-    if (!directorName) continue;
+  await prisma.teamMembership.upsert({
+    where: { userId_teamId: { userId: admin.id, teamId: team.id } },
+    update: { role: Role.ADMIN, active: true, directorId: null },
+    create: { userId: admin.id, teamId: team.id, role: Role.ADMIN },
+  });
 
-    await prisma.user.upsert({
-      where: { email: `${name}@santafe.local` },
+  for (const name of directors.map((director) => director.toLowerCase())) {
+    const email = `${name}@santafe.local`;
+    const user = await prisma.user.upsert({
+      where: { email },
       update: {},
-      create: {
-        email: `${name}@santafe.local`,
-        passwordHash: dirPass,
+      create: { email, passwordHash: dirPass },
+    });
+
+    await prisma.teamMembership.upsert({
+      where: { userId_teamId: { userId: user.id, teamId: team.id } },
+      update: {
         role: Role.DIRETOR,
-        directorId: directorIds[directorName],
+        directorId: directorIds.get(name),
+        active: true,
+      },
+      create: {
+        userId: user.id,
+        teamId: team.id,
+        role: Role.DIRETOR,
+        directorId: directorIds.get(name),
       },
     });
   }

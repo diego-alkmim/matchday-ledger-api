@@ -40,8 +40,8 @@ export class TransactionsController {
     description:
       'Com page ou pageSize, retorna itens e metadados de paginacao. Os filtros opcionais sao aplicados antes da paginacao.',
   })
-  list(@Query() query: ListTransactionsQueryDto) {
-    return this.service.list(query);
+  list(@Query() query: ListTransactionsQueryDto, @CurrentUser() user: AccessTokenPayload) {
+    return this.service.list(query, user.teamId);
   }
 
   @Post()
@@ -95,7 +95,7 @@ export class TransactionsController {
     status: 403,
     description: 'Não é permitido excluir lançamento de jogo fechado.',
   })
-  remove(@Param('id', ParseCuidPipe) id: string) {
-    return this.service.remove(id);
+  remove(@Param('id', ParseCuidPipe) id: string, @CurrentUser() user: AccessTokenPayload) {
+    return this.service.remove(id, user.teamId);
   }
 }
