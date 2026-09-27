@@ -6,6 +6,8 @@ import { RolesGuard } from '../common/guards/roles.guard';
 import { CreateUserSchema, CreateUserDto } from './dto/create-user.dto';
 import { ApiBearerAuth, ApiBody, ApiTags } from '@nestjs/swagger';
 import { domainErrors } from '../common/errors/domain-errors';
+import { AccessTokenPayload } from '../auth/interfaces/access-token-payload.interface';
+import { CurrentUser } from '../common/decorators/user.decorator';
 
 @Controller('users')
 @UseGuards(RolesGuard)
@@ -28,12 +30,12 @@ export class UsersController {
       },
     },
   })
-  async create(@Body() body: CreateUserDto) {
+  async create(@Body() body: CreateUserDto, @CurrentUser() user: AccessTokenPayload) {
     const parsed = CreateUserSchema.safeParse(body);
     if (!parsed.success) {
       throw new BadRequestException(domainErrors.invalidPayload);
     }
 
-    return this.service.create(parsed.data);
+    return this.service.create(parsed.data, user.teamId);
   }
 }

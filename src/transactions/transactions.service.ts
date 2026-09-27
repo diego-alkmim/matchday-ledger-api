@@ -42,11 +42,12 @@ export class TransactionsService {
     }
   }
 
-  async list(query: ListTransactionsQueryDto) {
+  async list(query: ListTransactionsQueryDto, teamId: string) {
     const paginated = query.page !== undefined || query.pageSize !== undefined;
     const page = query.page ?? 1;
     const pageSize = query.pageSize ?? 20;
     const where: Prisma.TransactionWhereInput = {
+      teamId,
       ...(query.gameId ? { gameId: query.gameId } : {}),
       ...(query.categoryId ? { categoryId: query.categoryId } : {}),
       ...(query.directorId ? { directorId: query.directorId } : {}),
@@ -102,8 +103,10 @@ export class TransactionsService {
 
   async create(data: CreateTransactionDto, user: AccessTokenPayload) {
     const [game, category] = await Promise.all([
-      this.prisma.game.findUnique({ where: { id: data.gameId } }),
-      this.prisma.category.findUnique({ where: { id: data.categoryId } }),
+      this.prisma.game.findUnique({ where: { id_teamId: { id: data.gameId, teamId: user.teamId } } }),
+      this.prisma.category.findUnique({
+        where: { id_teamId: { id: data.categoryId, teamId: user.teamId } },
+      }),
     ]);
 
     if (!game) throw new ForbiddenException(domainErrors.gameNotFound);
@@ -119,6 +122,7 @@ export class TransactionsService {
       ...data,
       date: parsedDate,
       createdByUserId: user.sub,
+      teamId: user.teamId,
       directorId: data.directorId ?? null,
     };
 
@@ -133,12 +137,20 @@ export class TransactionsService {
       throw new ForbiddenException(domainErrors.entryRequiresDirector);
     }
 
+    if (payload.directorId) {
+      const director = await this.prisma.director.findUnique({
+        where: { id_teamId: { id: payload.directorId, teamId: user.teamId } },
+        select: { id: true },
+      });
+      if (!director) throw new ForbiddenException(domainErrors.directorNotFound);
+    }
+
     return this.prisma.transaction.create({ data: payload });
   }
 
   async update(id: string, data: UpdateTransactionDto, user: AccessTokenPayload) {
     const transaction = await this.prisma.transaction.findUnique({
-      where: { id },
+      where: { id_teamId: { id, teamId: user.teamId } },
       include: { game: true, category: true },
     });
 
@@ -153,10 +165,14 @@ export class TransactionsService {
     const [targetGame, targetCategory] = await Promise.all([
       targetGameId === transaction.gameId
         ? Promise.resolve(transaction.game)
-        : this.prisma.game.findUnique({ where: { id: targetGameId } }),
+        : this.prisma.game.findUnique({
+            where: { id_teamId: { id: targetGameId, teamId: user.teamId } },
+          }),
       targetCategoryId === transaction.categoryId
         ? Promise.resolve(transaction.category)
-        : this.prisma.category.findUnique({ where: { id: targetCategoryId } }),
+        : this.prisma.category.findUnique({
+            where: { id_teamId: { id: targetCategoryId, teamId: user.teamId } },
+          }),
     ]);
 
     if (!targetGame) throw new ForbiddenException(domainErrors.gameNotFound);
@@ -185,6 +201,14 @@ export class TransactionsService {
       throw new ForbiddenException(domainErrors.entryRequiresDirector);
     }
 
+    if (nextDirectorId) {
+      const director = await this.prisma.director.findUnique({
+        where: { id_teamId: { id: nextDirectorId, teamId: user.teamId } },
+        select: { id: true },
+      });
+      if (!director) throw new ForbiddenException(domainErrors.directorNotFound);
+    }
+
     const parsedDate = data.date ? this.normalizeDate(data.date) : undefined;
     if (data.date && !parsedDate) {
       throw new ForbiddenException(domainErrors.invalidDate);
@@ -200,12 +224,15 @@ export class TransactionsService {
       payload.directorId = user.directorId;
     }
 
-    return this.prisma.transaction.update({ where: { id }, data: payload });
+    return this.prisma.transaction.update({
+      where: { id_teamId: { id, teamId: user.teamId } },
+      data: payload,
+    });
   }
 
-  async remove(id: string) {
+  async remove(id: string, teamId: string) {
     const transaction = await this.prisma.transaction.findUnique({
-      where: { id },
+      where: { id_teamId: { id, teamId } },
       include: { game: true },
     });
 
@@ -215,6 +242,6 @@ export class TransactionsService {
 
     this.assertGameOpen(transaction.game.status);
 
-    return this.prisma.transaction.delete({ where: { id } });
+    return this.prisma.transaction.delete({ where: { id_teamId: { id, teamId } } });
   }
 }

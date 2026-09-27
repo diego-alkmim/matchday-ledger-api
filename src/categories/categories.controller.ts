@@ -1,6 +1,8 @@
 import { Body, Controller, Delete, Get, Param, Post, Put, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiBody, ApiTags } from '@nestjs/swagger';
 import { Role } from '@prisma/client';
+import { AccessTokenPayload } from '../auth/interfaces/access-token-payload.interface';
+import { CurrentUser } from '../common/decorators/user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { ParseCuidPipe } from '../common/pipes/parse-cuid.pipe';
@@ -16,27 +18,31 @@ export class CategoriesController {
   constructor(private service: CategoriesService) {}
 
   @Get()
-  list() {
-    return this.service.list();
+  list(@CurrentUser() user: AccessTokenPayload) {
+    return this.service.list(user.teamId);
   }
 
   @Roles(Role.ADMIN)
   @Post()
   @ApiBody({ type: CreateCategoryDto })
-  create(@Body() body: CreateCategoryDto) {
-    return this.service.create(body);
+  create(@Body() body: CreateCategoryDto, @CurrentUser() user: AccessTokenPayload) {
+    return this.service.create(body, user.teamId);
   }
 
   @Roles(Role.ADMIN)
   @Put(':id')
   @ApiBody({ type: UpdateCategoryDto })
-  update(@Param('id', ParseCuidPipe) id: string, @Body() body: UpdateCategoryDto) {
-    return this.service.update(id, body);
+  update(
+    @Param('id', ParseCuidPipe) id: string,
+    @Body() body: UpdateCategoryDto,
+    @CurrentUser() user: AccessTokenPayload,
+  ) {
+    return this.service.update(id, body, user.teamId);
   }
 
   @Roles(Role.ADMIN)
   @Delete(':id')
-  remove(@Param('id', ParseCuidPipe) id: string) {
-    return this.service.remove(id);
+  remove(@Param('id', ParseCuidPipe) id: string, @CurrentUser() user: AccessTokenPayload) {
+    return this.service.remove(id, user.teamId);
   }
 }

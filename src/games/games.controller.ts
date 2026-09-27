@@ -1,6 +1,8 @@
 import { Body, Controller, Delete, Get, Param, Post, Put, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiBody, ApiTags } from '@nestjs/swagger';
 import { Role } from '@prisma/client';
+import { AccessTokenPayload } from '../auth/interfaces/access-token-payload.interface';
+import { CurrentUser } from '../common/decorators/user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { ParseCuidPipe } from '../common/pipes/parse-cuid.pipe';
@@ -16,39 +18,43 @@ export class GamesController {
   constructor(private service: GamesService) {}
 
   @Get()
-  list() {
-    return this.service.list();
+  list(@CurrentUser() user: AccessTokenPayload) {
+    return this.service.list(user.teamId);
   }
 
   @Roles(Role.ADMIN)
   @Post()
   @ApiBody({ type: CreateGameDto })
-  create(@Body() body: CreateGameDto) {
-    return this.service.create(body);
+  create(@Body() body: CreateGameDto, @CurrentUser() user: AccessTokenPayload) {
+    return this.service.create(body, user.teamId);
   }
 
   @Roles(Role.ADMIN)
   @Put(':id')
   @ApiBody({ type: UpdateGameDto })
-  update(@Param('id', ParseCuidPipe) id: string, @Body() body: UpdateGameDto) {
-    return this.service.update(id, body);
+  update(
+    @Param('id', ParseCuidPipe) id: string,
+    @Body() body: UpdateGameDto,
+    @CurrentUser() user: AccessTokenPayload,
+  ) {
+    return this.service.update(id, body, user.teamId);
   }
 
   @Roles(Role.ADMIN)
   @Delete(':id')
-  remove(@Param('id', ParseCuidPipe) id: string) {
-    return this.service.remove(id);
+  remove(@Param('id', ParseCuidPipe) id: string, @CurrentUser() user: AccessTokenPayload) {
+    return this.service.remove(id, user.teamId);
   }
 
   @Roles(Role.ADMIN)
   @Post(':id/close')
-  close(@Param('id', ParseCuidPipe) id: string) {
-    return this.service.setStatus(id, 'FECHADO');
+  close(@Param('id', ParseCuidPipe) id: string, @CurrentUser() user: AccessTokenPayload) {
+    return this.service.setStatus(id, 'FECHADO', user.teamId);
   }
 
   @Roles(Role.ADMIN)
   @Post(':id/reopen')
-  reopen(@Param('id', ParseCuidPipe) id: string) {
-    return this.service.setStatus(id, 'ABERTO');
+  reopen(@Param('id', ParseCuidPipe) id: string, @CurrentUser() user: AccessTokenPayload) {
+    return this.service.setStatus(id, 'ABERTO', user.teamId);
   }
 }

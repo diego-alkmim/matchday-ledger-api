@@ -12,15 +12,15 @@ import { AnalyticalByGameQueryDto } from './dto/analytical-by-game-query.dto';
 export class ReportsService {
   constructor(private prisma: PrismaService) {}
 
-  byGame(gameId: string) {
+  byGame(gameId: string, teamId: string) {
     return this.prisma.transaction.groupBy({
       by: ['type'],
-      where: { gameId },
+      where: { gameId, teamId },
       _sum: { amount: true },
     });
   }
 
-  monthly(from: string, to: string) {
+  monthly(from: string, to: string, teamId: string) {
     return this.prisma.$queryRaw`
       SELECT
         to_char(date_trunc('month', "createdAt"), 'YYYY-MM') as month_label,
@@ -28,27 +28,32 @@ export class ReportsService {
         SUM(CASE WHEN type='ENTRADA' THEN amount ELSE 0 END) as entradas,
         SUM(CASE WHEN type='SAIDA' THEN amount ELSE 0 END) as saidas
       FROM "Transaction"
-      WHERE "createdAt" BETWEEN ${from}::date AND ${to}::date
+      WHERE "teamId" = ${teamId}
+        AND "createdAt" >= ${from}::date
+        AND "createdAt" < (${to}::date + INTERVAL '1 day')
       GROUP BY 1,2
       ORDER BY 2;
     `;
   }
 
-  byCategory(from: string, to: string) {
+  byCategory(from: string, to: string, teamId: string) {
     return this.prisma.$queryRaw`
       SELECT c.name, SUM(t.amount) as total
       FROM "Transaction" t
       JOIN "Category" c ON c.id = t."categoryId"
-      WHERE t.date BETWEEN ${from}::date AND ${to}::date
+      WHERE t."teamId" = ${teamId}
+        AND t.date >= ${from}::date
+        AND t.date < (${to}::date + INTERVAL '1 day')
       GROUP BY c.name;
     `;
   }
 
-  async analyticalByGame(query: AnalyticalByGameQueryDto) {
+  async analyticalByGame(query: AnalyticalByGameQueryDto, teamId: string) {
     const paginated = query.page !== undefined || query.pageSize !== undefined;
     const page = query.page ?? 1;
     const pageSize = query.pageSize ?? 20;
     const transactionWhere: Prisma.TransactionWhereInput = {
+      teamId,
       ...(query.from || query.to
         ? {
             createdAt: {
@@ -63,8 +68,8 @@ export class ReportsService {
         : {}),
     };
     const gameWhere: Prisma.GameWhereInput = query.gameId
-      ? { id: query.gameId, transactions: { some: transactionWhere } }
-      : { transactions: { some: transactionWhere } };
+      ? { id: query.gameId, teamId, transactions: { some: transactionWhere } }
+      : { teamId, transactions: { some: transactionWhere } };
     const findManyArgs = {
       where: gameWhere,
       orderBy: { date: 'desc' } as const,
@@ -136,13 +141,18 @@ export class ReportsService {
       : items;
   }
 
-  async consolidatedByDirector(from?: string, to?: string, expectedPerGame = 70) {
+  async consolidatedByDirector(
+    from: string | undefined,
+    to: string | undefined,
+    expectedPerGame: number,
+    teamId: string,
+  ) {
     const dateFilter = from || to ? { createdAt: { ...(from ? { gte: new Date(`${from}T00:00:00.000Z`) } : {}), ...(to ? { lte: new Date(`${to}T23:59:59.999Z`) } : {}) } } : {};
     const [games, directors, paymentsRaw] = await Promise.all([
-      this.prisma.game.findMany({ where: dateFilter, orderBy: { date: 'asc' }, select: { id: true, date: true, opponent: true, location: true } }),
-      this.prisma.director.findMany({ where: { active: true }, orderBy: { name: 'asc' }, select: { id: true, name: true, contact: true } }),
+      this.prisma.game.findMany({ where: { teamId, ...dateFilter }, orderBy: { date: 'asc' }, select: { id: true, date: true, opponent: true, location: true } }),
+      this.prisma.director.findMany({ where: { teamId, active: true }, orderBy: { name: 'asc' }, select: { id: true, name: true, contact: true } }),
       this.prisma.transaction.findMany({
-        where: { type: 'ENTRADA', category: { name: 'Diretoria' }, ...dateFilter },
+        where: { teamId, type: 'ENTRADA', category: { name: 'Diretoria' }, ...dateFilter },
         include: { game: { select: { id: true, date: true, opponent: true, location: true } }, category: { select: { name: true, type: true } } },
         orderBy: { createdAt: 'desc' },
       }),

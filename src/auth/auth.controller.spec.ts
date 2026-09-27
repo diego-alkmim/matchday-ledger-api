@@ -6,8 +6,10 @@ import { TurnstileService } from './turnstile.service';
 
 describe('AuthController', () => {
   it('rejects a login request without a Turnstile token before authenticating', async () => {
-    const auth = { login: jest.fn() } as unknown as AuthService;
-    const turnstile = { verify: jest.fn() } as unknown as TurnstileService;
+    const login = jest.fn();
+    const verify = jest.fn();
+    const auth = { login } as unknown as AuthService;
+    const turnstile = { verify } as unknown as TurnstileService;
     const controller = new AuthController(auth, turnstile);
 
     await expect(
@@ -18,7 +20,7 @@ describe('AuthController', () => {
       ),
     ).rejects.toBeInstanceOf(BadRequestException);
 
-    expect(turnstile.verify).not.toHaveBeenCalled();
-    expect(auth.login).not.toHaveBeenCalled();
+    expect(verify).not.toHaveBeenCalled();
+    expect(login).not.toHaveBeenCalled();
   });
 });

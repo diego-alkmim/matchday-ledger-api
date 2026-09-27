@@ -1,31 +1,42 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateCategoryDto } from './dto/create-category.dto';
 import { UpdateCategoryDto } from './dto/update-category.dto';
+import { domainErrors } from '../common/errors/domain-errors';
 
 @Injectable()
 export class CategoriesService {
   constructor(private prisma: PrismaService) {}
 
-  list() {
-    return this.prisma.category.findMany();
+  list(teamId: string) {
+    return this.prisma.category.findMany({ where: { teamId }, orderBy: { name: 'asc' } });
   }
 
-  create(data: CreateCategoryDto) {
+  create(data: CreateCategoryDto, teamId: string) {
     return this.prisma.category.create({
-      data: data as Prisma.CategoryCreateInput,
+      data: { ...data, teamId },
     });
   }
 
-  update(id: string, data: UpdateCategoryDto) {
+  async update(id: string, data: UpdateCategoryDto, teamId: string) {
+    await this.assertExists(id, teamId);
     return this.prisma.category.update({
-      where: { id },
+      where: { id_teamId: { id, teamId } },
       data: data as Prisma.CategoryUpdateInput,
     });
   }
 
-  remove(id: string) {
-    return this.prisma.category.delete({ where: { id } });
+  async remove(id: string, teamId: string) {
+    await this.assertExists(id, teamId);
+    return this.prisma.category.delete({ where: { id_teamId: { id, teamId } } });
+  }
+
+  private async assertExists(id: string, teamId: string) {
+    const category = await this.prisma.category.findUnique({
+      where: { id_teamId: { id, teamId } },
+      select: { id: true },
+    });
+    if (!category) throw new NotFoundException(domainErrors.categoryNotFound);
   }
 }

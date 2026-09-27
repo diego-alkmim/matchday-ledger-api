@@ -29,7 +29,7 @@ describe('TurnstileService', () => {
     fetchMock.mockResolvedValue({
       ok: true,
       status: 200,
-      json: async () => ({ success: true, hostname: 'app.example.com' }),
+      json: () => Promise.resolve({ success: true, hostname: 'app.example.com' }),
     } as Response);
 
     await expect(service.verify('token', '203.0.113.1')).resolves.toBeUndefined();
@@ -39,7 +39,7 @@ describe('TurnstileService', () => {
     fetchMock.mockResolvedValue({
       ok: true,
       status: 200,
-      json: async () => ({ success: true, hostname: 'attacker.example.com' }),
+      json: () => Promise.resolve({ success: true, hostname: 'attacker.example.com' }),
     } as Response);
 
     await expect(service.verify('token', '203.0.113.1')).rejects.toBeInstanceOf(

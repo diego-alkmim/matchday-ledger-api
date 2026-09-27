@@ -2,7 +2,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ReportsService } from './reports.service';
 
 describe('ReportsService', () => {
-  const findMany = jest.fn();
+  const findMany = jest.fn<Promise<unknown[]>, [unknown]>();
   const count = jest.fn();
   const transaction = jest.fn((operations: Promise<unknown>[]) => Promise.all(operations));
   const prisma = {
@@ -40,7 +40,7 @@ describe('ReportsService', () => {
     ]);
     count.mockResolvedValueOnce(21);
 
-    const result = await service.analyticalByGame({ page: 2, pageSize: 20 });
+    const result = await service.analyticalByGame({ page: 2, pageSize: 20 }, 'team-1');
 
     if (Array.isArray(result)) {
       throw new Error('Expected a paginated analytical report response');
@@ -48,15 +48,21 @@ describe('ReportsService', () => {
 
     expect(result.pagination).toEqual({ page: 2, pageSize: 20, total: 21, totalPages: 2 });
     expect(result.items[0].transactions).toHaveLength(1);
-    expect(findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ skip: 20, take: 20, orderBy: { date: 'desc' } }),
-    );
+    expect(findMany).toHaveBeenCalled();
+    const findArgs = findMany.mock.calls[0]?.[0] as unknown as {
+      skip: number;
+      take: number;
+      orderBy: { date: string };
+      where: { teamId: string };
+    };
+    expect(findArgs).toMatchObject({ skip: 20, take: 20, orderBy: { date: 'desc' } });
+    expect(findArgs.where.teamId).toBe('team-1');
   });
 
   it('keeps the legacy array response when pagination is not requested', async () => {
     findMany.mockResolvedValueOnce([]);
 
-    await expect(service.analyticalByGame({})).resolves.toEqual([]);
+    await expect(service.analyticalByGame({}, 'team-1')).resolves.toEqual([]);
     expect(count).not.toHaveBeenCalled();
   });
 });

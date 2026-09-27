@@ -18,6 +18,7 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy && prisma generate",
     "prisma:seed": "ts-node prisma/seed.ts",
+    "team:create": "ts-node prisma/create-team.ts",
     "lint:fix": "eslint . --fix",
     "lint:types": "eslint --config eslint.typed.config.mjs ."
   },
