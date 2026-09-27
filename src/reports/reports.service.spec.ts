@@ -8,11 +8,13 @@ describe('ReportsService', () => {
   const transactionFindMany = jest.fn<Promise<unknown[]>, [unknown]>();
   const directorFindMany = jest.fn<Promise<unknown[]>, [unknown]>();
   const queryRaw = jest.fn<Promise<unknown[]>, unknown[]>();
+  const teamFindUniqueOrThrow = jest.fn<Promise<unknown>, [unknown]>();
   const transaction = jest.fn((operations: Promise<unknown>[]) => Promise.all(operations));
   const prisma = {
     game: { findMany, count },
     transaction: { groupBy, findMany: transactionFindMany },
     director: { findMany: directorFindMany },
+    team: { findUniqueOrThrow: teamFindUniqueOrThrow },
     $queryRaw: queryRaw,
     $transaction: transaction,
   } as unknown as PrismaService;
@@ -88,11 +90,15 @@ describe('ReportsService', () => {
   });
 
   it('scopes director consolidation sources to the same active team', async () => {
+    teamFindUniqueOrThrow.mockResolvedValue({
+      contributionMode: 'PER_GAME',
+      monthlyContributionPerDirector: 70,
+    });
     findMany.mockResolvedValue([]);
     directorFindMany.mockResolvedValue([]);
     transactionFindMany.mockResolvedValue([]);
 
-    await service.consolidatedByDirector(undefined, undefined, 70, 'team-2');
+    await service.consolidatedByDirector(undefined, undefined, 'team-2');
 
     const gameArgs = findMany.mock.calls[0]?.[0] as { where: Record<string, unknown> };
     const directorArgs = directorFindMany.mock.calls[0]?.[0] as {
@@ -104,5 +110,45 @@ describe('ReportsService', () => {
     expect(gameArgs.where.teamId).toBe('team-2');
     expect(directorArgs.where.teamId).toBe('team-2');
     expect(paymentArgs.where.teamId).toBe('team-2');
+  });
+
+  it('filters contribution obligations and payments by game date', async () => {
+    teamFindUniqueOrThrow.mockResolvedValue({
+      contributionMode: 'PER_GAME',
+      monthlyContributionPerDirector: 70,
+    });
+    findMany.mockResolvedValue([]);
+    directorFindMany.mockResolvedValue([]);
+    transactionFindMany.mockResolvedValue([]);
+
+    await service.consolidatedByDirector('2026-01-01', '2026-01-31', 'team-1');
+
+    const gameArgs = findMany.mock.calls[0]?.[0] as {
+      where: { date: { gte: Date; lte: Date } };
+    };
+    const paymentArgs = transactionFindMany.mock.calls[0]?.[0] as {
+      where: { game: { date: { gte: Date; lte: Date } } };
+    };
+    expect(gameArgs.where.date.gte.toISOString()).toBe('2026-01-01T03:00:00.000Z');
+    expect(gameArgs.where.date.lte.toISOString()).toBe('2026-02-01T02:59:59.999Z');
+    expect(paymentArgs.where.game.date).toEqual(gameArgs.where.date);
+  });
+
+  it('expands date filters to complete calendar months in monthly mode', async () => {
+    teamFindUniqueOrThrow.mockResolvedValue({
+      contributionMode: 'MONTHLY',
+      monthlyContributionPerDirector: 250,
+    });
+    findMany.mockResolvedValue([]);
+    directorFindMany.mockResolvedValue([]);
+    transactionFindMany.mockResolvedValue([]);
+
+    await service.consolidatedByDirector('2026-01-15', '2026-02-10', 'team-1');
+
+    const gameArgs = findMany.mock.calls[0]?.[0] as {
+      where: { date: { gte: Date; lte: Date } };
+    };
+    expect(gameArgs.where.date.gte.toISOString()).toBe('2026-01-01T03:00:00.000Z');
+    expect(gameArgs.where.date.lte.toISOString()).toBe('2026-03-01T02:59:59.999Z');
   });
 });

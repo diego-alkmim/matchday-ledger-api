@@ -1,6 +1,15 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { GameStatus } from '@prisma/client';
-import { IsDateString, IsEnum, IsOptional, IsString, MaxLength } from 'class-validator';
+import { Type } from 'class-transformer';
+import {
+  IsDateString,
+  IsEnum,
+  IsNumber,
+  IsOptional,
+  IsString,
+  MaxLength,
+  Min,
+} from 'class-validator';
 import { validationMessages } from '../../common/validation/messages';
 
 export class CreateGameDto {
@@ -25,4 +34,14 @@ export class CreateGameDto {
     message: validationMessages.enum('status', Object.values(GameStatus)),
   })
   status!: GameStatus;
+
+  @ApiProperty({
+    example: 70,
+    minimum: 0.01,
+    description: 'Valor esperado deste jogo para cada diretor no modo por jogo.',
+  })
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 }, { message: validationMessages.number('expectedContributionPerDirector') })
+  @Min(0.01, { message: validationMessages.positive('expectedContributionPerDirector') })
+  expectedContributionPerDirector!: number;
 }
