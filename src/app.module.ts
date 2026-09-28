@@ -15,6 +15,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { ThrottlerGuard } from '@nestjs/throttler';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { TeamsModule } from './teams/teams.module';
+import { CollectionsModule } from './collections/collections.module';
 
 @Module({
   imports: [
@@ -45,6 +46,7 @@ import { TeamsModule } from './teams/teams.module';
     TransactionsModule,
     ReportsModule,
     TeamsModule,
+    CollectionsModule,
   ],
   controllers: [HealthController],
   providers: [

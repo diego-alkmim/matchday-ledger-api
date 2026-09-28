@@ -1,0 +1,142 @@
+import { BadRequestException, Injectable } from '@nestjs/common';
+import {
+  CollectionFrequency,
+  CollectionPlan,
+  CollectionPlanRate,
+  MemberRoleAssignment,
+  Prisma,
+  ProrationPolicy,
+} from '@prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
+
+type PlanWithRates = CollectionPlan & { rates: CollectionPlanRate[] };
+
+@Injectable()
+export class CollectionsGenerationService {
+  constructor(private prisma: PrismaService) {}
+
+  async generate(teamId: string, fromInput: string, toInput: string) {
+    const from = this.dateOnly(fromInput);
+    const to = this.dateOnly(toInput);
+    if (from > to) throw new BadRequestException('O período informado é inválido.');
+
+    const [plans, members, games] = await Promise.all([
+      this.prisma.collectionPlan.findMany({
+        where: { teamId, active: true, effectiveFrom: { lte: to }, OR: [{ inactiveAt: null }, { inactiveAt: { gte: from } }] },
+        include: { rates: { orderBy: { effectiveFrom: 'asc' } } },
+        orderBy: { priority: 'desc' },
+      }),
+      this.prisma.member.findMany({
+        where: { teamId, activeFrom: { lte: to } },
+        include: { roles: true },
+      }),
+      this.prisma.game.findMany({ where: { teamId, date: { gte: from, lte: this.endOfDay(to) } }, orderBy: { date: 'asc' } }),
+    ]);
+
+    let created = 0;
+    for (const member of members) {
+      for (const plan of plans) {
+        if (plan.frequency === CollectionFrequency.MONTHLY) {
+          created += await this.generateMonthly(plan, plans, member.id, member.roles, from, to);
+        } else {
+          created += await this.generatePerGame(plan, plans, member.id, member.roles, games);
+        }
+      }
+    }
+    return { created };
+  }
+
+  private async generateMonthly(plan: PlanWithRates, plans: PlanWithRates[], memberId: string, roles: MemberRoleAssignment[], from: Date, to: Date) {
+    let created = 0;
+    for (const competence of this.monthsBetween(from, to)) {
+      const dueDate = new Date(Date.UTC(competence.getUTCFullYear(), competence.getUTCMonth(), plan.dueDay ?? 20));
+      const referenceDate = plan.prorationPolicy === ProrationPolicy.FULL_AMOUNT
+        ? new Date(Date.UTC(competence.getUTCFullYear(), competence.getUTCMonth() + 1, 0))
+        : plan.prorationPolicy === ProrationPolicy.NEXT_MONTH
+          ? new Date(competence.getTime() - 1)
+          : dueDate;
+      if (!this.planWinsAt(plan, plans, roles, referenceDate)) continue;
+      const rate = this.rateAt(plan.rates, referenceDate);
+      if (!rate) continue;
+      const result = await this.prisma.collectionObligation.upsert({
+        where: { planId_memberId_competence: { planId: plan.id, memberId, competence } },
+        create: {
+          teamId: plan.teamId, planId: plan.id, memberId, competence, dueDate,
+          roleSnapshot: plan.audienceRole, originalAmount: rate.amount, expectedAmount: rate.amount,
+        },
+        update: {},
+        select: { createdAt: true, updatedAt: true },
+      });
+      if (result.createdAt.getTime() === result.updatedAt.getTime()) created++;
+    }
+    return created;
+  }
+
+  private async generatePerGame(
+    plan: PlanWithRates,
+    plans: PlanWithRates[],
+    memberId: string,
+    roles: MemberRoleAssignment[],
+    games: Array<{ id: string; date: Date; expectedContributionPerDirector: Prisma.Decimal }>,
+  ) {
+    let created = 0;
+    for (const game of games) {
+      if (!this.planWinsAt(plan, plans, roles, game.date)) continue;
+      const rate = this.rateAt(plan.rates, game.date);
+      const amount = plan.audienceRole === 'DIRECTOR' ? game.expectedContributionPerDirector : rate?.amount;
+      if (!amount) continue;
+      const result = await this.prisma.collectionObligation.upsert({
+        where: { planId_memberId_gameId: { planId: plan.id, memberId, gameId: game.id } },
+        create: {
+          teamId: plan.teamId, planId: plan.id, memberId, gameId: game.id, dueDate: game.date,
+          roleSnapshot: plan.audienceRole, originalAmount: amount, expectedAmount: amount,
+        },
+        update: {},
+        select: { createdAt: true, updatedAt: true },
+      });
+      if (result.createdAt.getTime() === result.updatedAt.getTime()) created++;
+    }
+    return created;
+  }
+
+  private planWinsAt(plan: PlanWithRates, plans: PlanWithRates[], roles: MemberRoleAssignment[], date: Date) {
+    if (!this.hasRole(roles, plan.audienceRole, date) || !this.planActive(plan, date)) return false;
+    return !plans.some((candidate) =>
+      candidate.id !== plan.id &&
+      candidate.exclusiveGroup === plan.exclusiveGroup &&
+      (candidate.priority > plan.priority || (candidate.priority === plan.priority && candidate.id < plan.id)) &&
+      this.planActive(candidate, date) &&
+      this.hasRole(roles, candidate.audienceRole, date),
+    );
+  }
+
+  private hasRole(roles: MemberRoleAssignment[], role: MemberRoleAssignment['role'], date: Date) {
+    return roles.some((assignment) => assignment.role === role && assignment.startsAt <= date && (!assignment.endsAt || assignment.endsAt >= date));
+  }
+
+  private planActive(plan: CollectionPlan, date: Date) {
+    return plan.effectiveFrom <= date && (!plan.inactiveAt || plan.inactiveAt >= date);
+  }
+
+  private rateAt(rates: CollectionPlanRate[], date: Date) {
+    return [...rates].reverse().find((rate) => rate.effectiveFrom <= date);
+  }
+
+  private monthsBetween(from: Date, to: Date) {
+    const months: Date[] = [];
+    let cursor = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), 1));
+    while (cursor <= to) {
+      months.push(cursor);
+      cursor = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() + 1, 1));
+    }
+    return months;
+  }
+
+  private dateOnly(value: string) {
+    return new Date(`${value.slice(0, 10)}T00:00:00.000Z`);
+  }
+
+  private endOfDay(value: Date) {
+    return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate(), 23, 59, 59, 999));
+  }
+}

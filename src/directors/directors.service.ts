@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { MemberRole, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateDirectorDto } from './dto/create-director.dto';
 import { UpdateDirectorDto } from './dto/update-director.dto';
@@ -10,26 +10,85 @@ export class DirectorsService {
   constructor(private prisma: PrismaService) {}
 
   list(teamId: string) {
-    return this.prisma.director.findMany({ where: { teamId }, orderBy: { name: 'asc' } });
+    return this.prisma.director.findMany({ where: { teamId, active: true }, orderBy: { name: 'asc' } });
   }
 
   create(data: CreateDirectorDto, teamId: string) {
-    return this.prisma.director.create({
-      data: { ...data, teamId },
+    return this.prisma.$transaction(async (tx) => {
+      const activeFrom = new Date();
+      const existingMember = await tx.member.findUnique({
+        where: { teamId_name: { teamId, name: data.name } },
+        include: { roles: true },
+      });
+      const member = existingMember ?? await tx.member.create({
+        data: { teamId, name: data.name, contact: data.contact, active: data.active ?? true, activeFrom },
+        include: { roles: true },
+      });
+      if (existingMember) {
+        await tx.member.update({
+          where: { id_teamId: { id: member.id, teamId } },
+          data: { active: data.active ?? true, inactiveAt: null, contact: data.contact ?? member.contact },
+        });
+      }
+      if (!member.roles.some((role) => role.role === MemberRole.DIRECTOR && !role.endsAt)) {
+        await tx.memberRoleAssignment.create({
+          data: { teamId, memberId: member.id, role: MemberRole.DIRECTOR, startsAt: activeFrom },
+        });
+      }
+      return tx.director.create({ data: { ...data, teamId, memberId: member.id } });
     });
   }
 
   async update(id: string, data: UpdateDirectorDto, teamId: string) {
     await this.assertExists(id, teamId);
-    return this.prisma.director.update({
-      where: { id_teamId: { id, teamId } },
-      data: data as Prisma.DirectorUpdateInput,
+    return this.prisma.$transaction(async (tx) => {
+      const director = await tx.director.update({
+        where: { id_teamId: { id, teamId } },
+        data: data as Prisma.DirectorUpdateInput,
+      });
+      if (director.memberId) {
+        const roleDate = new Date();
+        await tx.member.update({
+          where: { id_teamId: { id: director.memberId, teamId } },
+          data: {
+            name: data.name,
+            contact: data.contact,
+            active: data.active,
+            ...(data.active === true ? { inactiveAt: null } : data.active === false ? { inactiveAt: roleDate } : {}),
+          },
+        });
+        if (data.active === false) {
+          await tx.memberRoleAssignment.updateMany({
+            where: { teamId, memberId: director.memberId, role: MemberRole.DIRECTOR, endsAt: null },
+            data: { endsAt: roleDate },
+          });
+        } else if (data.active === true) {
+          const activeRole = await tx.memberRoleAssignment.findFirst({
+            where: { teamId, memberId: director.memberId, role: MemberRole.DIRECTOR, endsAt: null },
+          });
+          if (!activeRole) {
+            await tx.memberRoleAssignment.create({
+              data: { teamId, memberId: director.memberId, role: MemberRole.DIRECTOR, startsAt: roleDate },
+            });
+          }
+        }
+      }
+      return director;
     });
   }
 
   async remove(id: string, teamId: string) {
-    await this.assertExists(id, teamId);
-    return this.prisma.director.delete({ where: { id_teamId: { id, teamId } } });
+    const director = await this.prisma.director.findUnique({ where: { id_teamId: { id, teamId } } });
+    if (!director) throw new NotFoundException(domainErrors.directorNotFound);
+    const inactiveAt = new Date();
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.director.update({ where: { id_teamId: { id, teamId } }, data: { active: false } });
+      if (director.memberId) {
+        await tx.member.update({ where: { id_teamId: { id: director.memberId, teamId } }, data: { active: false, inactiveAt } });
+        await tx.memberRoleAssignment.updateMany({ where: { teamId, memberId: director.memberId, role: MemberRole.DIRECTOR, endsAt: null }, data: { endsAt: inactiveAt } });
+      }
+      return updated;
+    });
   }
 
   private async assertExists(id: string, teamId: string) {

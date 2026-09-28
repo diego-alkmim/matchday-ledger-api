@@ -36,7 +36,7 @@ export class ReportsService {
   byGame(gameId: string, teamId: string) {
     return this.prisma.transaction.groupBy({
       by: ['type'],
-      where: { gameId, teamId },
+      where: { gameId, teamId, reversedAt: null },
       _sum: { amount: true },
     });
   }
@@ -50,6 +50,7 @@ export class ReportsService {
         SUM(CASE WHEN type='SAIDA' THEN amount ELSE 0 END) as saidas
       FROM "Transaction"
       WHERE "teamId" = ${teamId}
+        AND "reversedAt" IS NULL
         AND "createdAt" >= ${from}::date
         AND "createdAt" < (${to}::date + INTERVAL '1 day')
       GROUP BY 1,2
@@ -63,6 +64,7 @@ export class ReportsService {
       FROM "Transaction" t
       JOIN "Category" c ON c.id = t."categoryId"
       WHERE t."teamId" = ${teamId}
+        AND t."reversedAt" IS NULL
         AND t.date >= ${from}::date
         AND t.date < (${to}::date + INTERVAL '1 day')
       GROUP BY c.name;
@@ -75,6 +77,7 @@ export class ReportsService {
     const pageSize = query.pageSize ?? 20;
     const transactionWhere: Prisma.TransactionWhereInput = {
       teamId,
+      reversedAt: null,
       ...(query.from || query.to
         ? {
             createdAt: {
@@ -188,7 +191,9 @@ export class ReportsService {
       this.prisma.transaction.findMany({
         where: {
           teamId,
+          reversedAt: null,
           type: 'ENTRADA',
+          gameId: { not: null },
           category: { name: 'Diretoria' },
           ...(gameDateFilter ? { game: { date: gameDateFilter } } : {}),
         },

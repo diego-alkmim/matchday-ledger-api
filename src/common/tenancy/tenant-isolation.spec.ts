@@ -8,9 +8,16 @@ describe('Tenant isolation for team-owned records', () => {
   const categoryCreate = jest.fn<Promise<unknown>, [unknown]>();
   const directorFindMany = jest.fn<Promise<unknown[]>, [unknown]>();
   const directorCreate = jest.fn<Promise<unknown>, [unknown]>();
+  const memberFindUnique = jest.fn();
+  const memberCreate = jest.fn();
+  const roleCreate = jest.fn();
+  const transaction = jest.fn(async (callback: (tx: unknown) => Promise<unknown>) => callback(prisma));
   const prisma = {
     category: { findMany: categoryFindMany, create: categoryCreate },
     director: { findMany: directorFindMany, create: directorCreate },
+    member: { findUnique: memberFindUnique, create: memberCreate },
+    memberRoleAssignment: { create: roleCreate },
+    $transaction: transaction,
   } as unknown as PrismaService;
   const categories = new CategoriesService(prisma);
   const directors = new DirectorsService(prisma);
@@ -29,7 +36,7 @@ describe('Tenant isolation for team-owned records', () => {
       orderBy: { name: 'asc' },
     });
     expect(directorFindMany).toHaveBeenCalledWith({
-      where: { teamId: 'team-a' },
+      where: { teamId: 'team-a', active: true },
       orderBy: { name: 'asc' },
     });
   });
@@ -37,6 +44,8 @@ describe('Tenant isolation for team-owned records', () => {
   it('ignores any external tenant context and stamps the active team on creation', async () => {
     categoryCreate.mockResolvedValue({ id: 'category-1' });
     directorCreate.mockResolvedValue({ id: 'director-1' });
+    memberFindUnique.mockResolvedValue(null);
+    memberCreate.mockResolvedValue({ id: 'member-1', roles: [] });
 
     await categories.create({ name: 'Diretoria', type: CategoryType.ENTRADA }, 'team-b');
     await directors.create({ name: 'Director' }, 'team-b');
@@ -45,7 +54,7 @@ describe('Tenant isolation for team-owned records', () => {
       data: { name: 'Diretoria', type: CategoryType.ENTRADA, teamId: 'team-b' },
     });
     expect(directorCreate).toHaveBeenCalledWith({
-      data: { name: 'Director', teamId: 'team-b' },
+      data: { name: 'Director', teamId: 'team-b', memberId: 'member-1' },
     });
   });
 });

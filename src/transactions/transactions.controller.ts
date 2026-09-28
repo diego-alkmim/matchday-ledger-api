@@ -25,6 +25,7 @@ import { ParseCuidPipe } from '../common/pipes/parse-cuid.pipe';
 import { CreateTransactionDto } from './dto/create-transaction.dto';
 import { ListTransactionsQueryDto } from './dto/list-transactions-query.dto';
 import { UpdateTransactionDto } from './dto/update-transaction.dto';
+import { ReverseTransactionDto } from './dto/reverse-transaction.dto';
 import { TransactionsService } from './transactions.service';
 
 @Controller('transactions')
@@ -88,14 +89,18 @@ export class TransactionsController {
   @Delete(':id')
   @Roles(Role.ADMIN)
   @ApiOperation({
-    summary: 'Excluir lançamento',
-    description: 'Exclui um lançamento apenas quando ele pertence a jogo aberto.',
+    summary: 'Estornar lançamento',
+    description: 'Retira o lançamento dos totais sem apagar o histórico. Exige motivo e jogo aberto.',
   })
   @ApiResponse({
     status: 403,
-    description: 'Não é permitido excluir lançamento de jogo fechado.',
+    description: 'Não é permitido estornar lançamento de jogo fechado ou pagamento gerenciado por arrecadações.',
   })
-  remove(@Param('id', ParseCuidPipe) id: string, @CurrentUser() user: AccessTokenPayload) {
-    return this.service.remove(id, user.teamId);
+  remove(
+    @Param('id', ParseCuidPipe) id: string,
+    @Body() body: ReverseTransactionDto,
+    @CurrentUser() user: AccessTokenPayload,
+  ) {
+    return this.service.remove(id, body.reason, user);
   }
 }

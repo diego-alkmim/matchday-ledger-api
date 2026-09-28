@@ -84,7 +84,7 @@ describe('ReportsService', () => {
     await service.byCategory('2026-01-01', '2026-12-31', 'team-1');
 
     const groupArgs = groupBy.mock.calls[0]?.[0] as { where: Record<string, unknown> };
-    expect(groupArgs.where).toEqual({ gameId: 'game-1', teamId: 'team-1' });
+    expect(groupArgs.where).toEqual({ gameId: 'game-1', teamId: 'team-1', reversedAt: null });
     expect(queryRaw.mock.calls[0]).toContain('team-1');
     expect(queryRaw.mock.calls[1]).toContain('team-1');
   });
