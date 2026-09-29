@@ -10,6 +10,10 @@ import {
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CollectionsLedgerService } from './collections-ledger.service';
+import {
+  AUTOMATIC_CANCELLATION_REASON,
+  AUTOMATIC_CANCELLATION_RELEASE_REASON,
+} from './collections.constants';
 
 @Injectable()
 export class CollectionsReconciliationService {
@@ -47,13 +51,13 @@ export class CollectionsReconciliationService {
             obligationId: obligation.id,
             type: AdjustmentType.CANCELLATION,
             amount: 0,
-            reason: 'Cancelamento automático por alteração de vigência ou função.',
+            reason: AUTOMATIC_CANCELLATION_REASON,
             createdByUserId: actorId,
           },
         });
         await tx.collectionAllocation.updateMany({
           where: { obligationId: obligation.id, releasedAt: null },
-          data: { releasedAt: now, releaseReason: 'Obrigação cancelada automaticamente.' },
+          data: { releasedAt: now, releaseReason: AUTOMATIC_CANCELLATION_RELEASE_REASON },
         });
         await tx.collectionObligation.update({
           where: { id: obligation.id },

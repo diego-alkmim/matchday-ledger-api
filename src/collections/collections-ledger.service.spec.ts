@@ -2,6 +2,7 @@ import { AdjustmentType, CollectionPaymentStatus, ObligationStatus, Prisma, Role
 import { AccessTokenPayload } from '../auth/interfaces/access-token-payload.interface';
 import { PrismaService } from '../prisma/prisma.service';
 import { CollectionsLedgerService } from './collections-ledger.service';
+import { AUTOMATIC_CANCELLATION_REASON } from './collections.constants';
 
 describe('CollectionsLedgerService', () => {
   const paymentFindUnique = jest.fn();
@@ -118,6 +119,18 @@ describe('CollectionsLedgerService', () => {
     expect(obligationUpdate).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ status: ObligationStatus.OPEN }),
     }));
+  });
+
+  it('does not allow an automatic cancellation to be manually reversed', async () => {
+    adjustmentFindUnique.mockResolvedValue({
+      id: 'adjustment-1', reversedAt: null, type: AdjustmentType.CANCELLATION,
+      reason: AUTOMATIC_CANCELLATION_REASON,
+      obligation: { id: 'obligation-1', teamId: 'team-1' },
+    });
+
+    await expect(service.reverseAdjustment('adjustment-1', 'Reabrir', user))
+      .rejects.toThrow('Cancelamentos automáticos não podem ser desfeitos manualmente.');
+    expect(adjustmentUpdate).not.toHaveBeenCalled();
   });
 
   it('returns over-allocation to credit when a surcharge is reversed', async () => {

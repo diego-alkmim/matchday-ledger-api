@@ -30,7 +30,10 @@ describe('CollectionsDirectorReportService', () => {
   const ledger = { applyAvailableCredits: jest.fn() } as unknown as CollectionsLedgerService;
   const service = new CollectionsDirectorReportService(prisma, generation, ledger);
 
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (generation.generate as jest.Mock).mockResolvedValue({ created: 0 });
+  });
 
   it('uses monthly collection obligations and payments without requiring a game', async () => {
     planFindMany.mockResolvedValue([{
@@ -97,7 +100,10 @@ describe('CollectionsDirectorReportService', () => {
       id: 'game-legacy', date: new Date('2026-08-10'), opponent: 'Antigo', location: null,
       expectedContributionPerDirector: new Prisma.Decimal(70),
     }]);
-    directorFindMany.mockResolvedValue([{ id: 'director-1', name: 'Diretor', contact: null }]);
+    directorFindMany.mockResolvedValue([{
+      id: 'director-1', memberId: 'director-1', name: 'Diretor', contact: null, active: true,
+      member: { roles: [] },
+    }]);
     transactionFindMany.mockResolvedValue([{
       id: 'transaction-1', amount: new Prisma.Decimal(70), createdAt: new Date('2026-08-10'),
       date: new Date('2026-08-10'), notes: null, paymentMethod: 'PIX', directorId: 'director-1',
@@ -111,6 +117,20 @@ describe('CollectionsDirectorReportService', () => {
       obligationsCount: 2, settledObligationsCount: 2, expectedTotal: 140, totalPaid: 140,
     });
     expect(result?.games).toHaveLength(2);
+  });
+
+  it('applies available credits only when report generation creates obligations', async () => {
+    planFindMany.mockResolvedValue([{
+      id: 'plan-1', frequency: CollectionFrequency.MONTHLY, exclusiveGroup: 'membership',
+      effectiveFrom: new Date('2026-09-01'),
+    }]);
+    obligationFindMany.mockResolvedValue([]);
+    paymentFindMany.mockResolvedValue([]);
+    (generation.generate as jest.Mock).mockResolvedValue({ created: 1 });
+
+    await service.build('team-1', '2026-09-01', '2026-09-30');
+
+    expect(ledger.applyAvailableCredits).toHaveBeenCalledWith('team-1');
   });
 
   it('counts a payment from another plan when it was allocated to a director obligation', async () => {

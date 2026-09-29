@@ -15,7 +15,7 @@ import {
   ContributionObligation,
   groupPaymentsByDirector,
 } from './director-consolidation';
-import { historicalDirectorWhere } from './historical-directors';
+import { buildHistoricalDirectorEntries, historicalDirectorSelect } from './historical-directors';
 import { collectionGenerationRange, isInCollectionRange } from './collection-report-range';
 
 type DirectorReportEntry = ReturnType<typeof buildDirectorConsolidation>;
@@ -56,8 +56,8 @@ export class CollectionsDirectorReportService {
     });
     if (!plans.length) return null;
     const generationRange = collectionGenerationRange(from, to, plans.map((plan) => plan.effectiveFrom));
-    await this.generation.generate(teamId, generationRange.from, generationRange.to);
-    await this.ledger.applyAvailableCredits(teamId);
+    const generation = await this.generation.generate(teamId, generationRange.from, generationRange.to);
+    if (generation.created > 0) await this.ledger.applyAvailableCredits(teamId);
     const planIds = plans.map((plan) => plan.id);
     const planIdSet = new Set(planIds);
 
@@ -208,9 +208,9 @@ export class CollectionsDirectorReportService {
         },
       }),
       this.prisma.director.findMany({
-        where: historicalDirectorWhere(teamId, gameDate),
+        where: { teamId },
         orderBy: { name: 'asc' },
-        select: { id: true, name: true, contact: true },
+        select: historicalDirectorSelect,
       }),
       this.prisma.transaction.findMany({
         where: {
@@ -227,24 +227,25 @@ export class CollectionsDirectorReportService {
     const monthlyAmount = Number(team.monthlyContributionPerDirector);
     const obligations = buildContributionObligations(games, team.contributionMode, monthlyAmount);
     const paymentsByDirector = groupPaymentsByDirector(directors, payments);
+    const directorEntries = buildHistoricalDirectorEntries(
+      directors,
+      obligations,
+      paymentsByDirector,
+      team.contributionMode,
+    );
     return {
       summary: {
         mode: team.contributionMode,
         gamesCount: games.length,
         obligationsCount: obligations.length,
         monthlyContributionPerDirector: team.contributionMode === ContributionMode.MONTHLY ? monthlyAmount : null,
-        expectedTotalPerDirector: this.money(obligations.reduce((sum, item) => sum + item.expectedAmount, 0)),
+        expectedTotalPerDirector: directorEntries.length
+          ? this.money(directorEntries.reduce((sum, item) => sum + item.totals.expectedTotal, 0) / directorEntries.length)
+          : 0,
       },
       games,
       obligations,
-      directors: directors.map((director) =>
-        buildDirectorConsolidation(
-          director,
-          obligations,
-          paymentsByDirector.get(director.id) ?? [],
-          team.contributionMode,
-        ),
-      ),
+      directors: directorEntries,
     };
   }
 

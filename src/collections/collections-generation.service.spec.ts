@@ -6,20 +6,20 @@ describe('CollectionsGenerationService', () => {
   const planFindMany = jest.fn();
   const memberFindMany = jest.fn();
   const gameFindMany = jest.fn();
-  const obligationUpsert = jest.fn();
+  const obligationFindMany = jest.fn();
+  const obligationCreateMany = jest.fn();
   const prisma = {
     collectionPlan: { findMany: planFindMany },
     member: { findMany: memberFindMany },
     game: { findMany: gameFindMany },
-    collectionObligation: { upsert: obligationUpsert },
+    collectionObligation: { findMany: obligationFindMany, createMany: obligationCreateMany },
   } as unknown as PrismaService;
   const service = new CollectionsGenerationService(prisma);
-  const now = new Date('2026-09-01T00:00:00.000Z');
-
   beforeEach(() => {
     jest.clearAllMocks();
     gameFindMany.mockResolvedValue([]);
-    obligationUpsert.mockResolvedValue({ createdAt: now, updatedAt: now });
+    obligationFindMany.mockResolvedValue([]);
+    obligationCreateMany.mockImplementation(({ data }) => Promise.resolve({ count: data.length }));
   });
 
   it('creates monthly obligations without requiring games and applies role priority', async () => {
@@ -31,8 +31,8 @@ describe('CollectionsGenerationService', () => {
 
     await service.generate('team-1', '2026-09-01', '2026-09-30');
 
-    expect(obligationUpsert).toHaveBeenCalledTimes(1);
-    expect(obligationUpsert.mock.calls[0][0].create).toMatchObject({
+    expect(obligationCreateMany).toHaveBeenCalledTimes(1);
+    expect(obligationCreateMany.mock.calls[0][0].data[0]).toMatchObject({
       planId: 'director-plan',
       memberId: 'member-1',
       roleSnapshot: MemberRole.DIRECTOR,
@@ -47,11 +47,22 @@ describe('CollectionsGenerationService', () => {
 
     await service.generate('team-1', '2026-09-01', '2026-09-30');
 
-    expect(obligationUpsert.mock.calls[0][0].create).toMatchObject({
+    expect(obligationCreateMany.mock.calls[0][0].data[0]).toMatchObject({
       gameId: 'game-1',
       originalAmount: new Prisma.Decimal(85),
       expectedAmount: new Prisma.Decimal(85),
     });
+  });
+
+  it('returns the database count instead of recounting existing obligations', async () => {
+    planFindMany.mockResolvedValue([plan('director-plan', MemberRole.DIRECTOR, 100)]);
+    memberFindMany.mockResolvedValue([{ id: 'member-1', roles: [role(MemberRole.DIRECTOR)] }]);
+    obligationFindMany.mockResolvedValue([{
+      planId: 'director-plan', memberId: 'member-1', competence: new Date('2026-09-01'), gameId: null,
+    }]);
+
+    await expect(service.generate('team-1', '2026-09-01', '2026-09-30')).resolves.toEqual({ created: 0 });
+    expect(obligationCreateMany).not.toHaveBeenCalled();
   });
 });
 

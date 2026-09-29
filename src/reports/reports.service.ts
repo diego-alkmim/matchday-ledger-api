@@ -4,12 +4,11 @@ import { buildPaginationMeta } from '../common/dto/pagination.dto';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   buildContributionObligations,
-  buildDirectorConsolidation,
   groupPaymentsByDirector,
 } from './director-consolidation';
 import { AnalyticalByGameQueryDto } from './dto/analytical-by-game-query.dto';
 import { CollectionsDirectorReportService } from './collections-director-report.service';
-import { historicalDirectorWhere } from './historical-directors';
+import { buildHistoricalDirectorEntries, historicalDirectorSelect } from './historical-directors';
 
 function buildContributionDateFilter(
   from: string | undefined,
@@ -196,9 +195,9 @@ export class ReportsService {
         },
       }),
       this.prisma.director.findMany({
-        where: historicalDirectorWhere(teamId, gameDateFilter),
+        where: { teamId },
         orderBy: { name: 'asc' },
-        select: { id: true, name: true, contact: true },
+        select: historicalDirectorSelect,
       }),
       this.prisma.transaction.findMany({
         where: {
@@ -220,10 +219,18 @@ export class ReportsService {
       monthlyContributionPerDirector,
     );
     const paymentsByDirector = groupPaymentsByDirector(directors, paymentsRaw);
-    const expectedTotalPerDirector =
-      Math.round(
-        obligations.reduce((sum, obligation) => sum + obligation.expectedAmount, 0) * 100,
-      ) / 100;
+    const directorEntries = buildHistoricalDirectorEntries(
+      directors,
+      obligations,
+      paymentsByDirector,
+      team.contributionMode,
+    );
+    const expectedTotalPerDirector = directorEntries.length
+      ? Math.round(
+        (directorEntries.reduce((sum, director) => sum + director.totals.expectedTotal, 0) /
+          directorEntries.length) * 100,
+      ) / 100
+      : 0;
 
     return {
       summary: {
@@ -236,14 +243,7 @@ export class ReportsService {
       },
       games,
       obligations,
-      directors: directors.map((director) =>
-        buildDirectorConsolidation(
-          director,
-          obligations,
-          paymentsByDirector.get(director.id) ?? [],
-          team.contributionMode,
-        ),
-      ),
+      directors: directorEntries,
     };
   }
 }

@@ -8,6 +8,7 @@ import {
 } from '@prisma/client';
 import { AccessTokenPayload } from '../auth/interfaces/access-token-payload.interface';
 import { PrismaService } from '../prisma/prisma.service';
+import { AUTOMATIC_CANCELLATION_REASON } from './collections.constants';
 import { AdjustObligationDto, CreateCollectionPaymentDto } from './dto/collections.dto';
 
 @Injectable()
@@ -174,9 +175,10 @@ export class CollectionsLedgerService {
           data: { releasedAt: new Date(), releaseReason: dto.reason },
         });
       }
-      return this.recalculateObligation(tx, id);
+      const result = await this.recalculateObligation(tx, id);
+      await this.applyAvailableCreditsInTransaction(tx, user.teamId);
+      return result;
     });
-    await this.applyAvailableCredits(user.teamId);
     return result;
   }
 
@@ -190,6 +192,9 @@ export class CollectionsLedgerService {
         throw new NotFoundException('Ajuste não encontrado.');
       }
       if (adjustment.reversedAt) throw new BadRequestException('Ajuste já estornado.');
+      if (adjustment.type === AdjustmentType.CANCELLATION && adjustment.reason === AUTOMATIC_CANCELLATION_REASON) {
+        throw new BadRequestException('Cancelamentos automáticos não podem ser desfeitos manualmente.');
+      }
       await tx.collectionAdjustment.update({
         where: { id },
         data: {
@@ -198,9 +203,10 @@ export class CollectionsLedgerService {
           reversalReason: reason,
         },
       });
-      return this.recalculateObligation(tx, adjustment.obligation.id);
+      const result = await this.recalculateObligation(tx, adjustment.obligation.id);
+      await this.applyAvailableCreditsInTransaction(tx, user.teamId);
+      return result;
     });
-    await this.applyAvailableCredits(user.teamId);
     return result;
   }
 

@@ -33,21 +33,36 @@ export class CollectionsGenerationService {
       this.prisma.game.findMany({ where: { teamId, date: { gte: from, lte: this.endOfDay(to) } }, orderBy: { date: 'asc' } }),
     ]);
 
-    let created = 0;
+    const obligations: Prisma.CollectionObligationCreateManyInput[] = [];
     for (const member of members) {
       for (const plan of plans) {
         if (plan.frequency === CollectionFrequency.MONTHLY) {
-          created += await this.generateMonthly(plan, plans, member.id, member.roles, from, to);
+          obligations.push(...this.buildMonthly(plan, plans, member.id, member.roles, from, to));
         } else {
-          created += await this.generatePerGame(plan, plans, member.id, member.roles, games);
+          obligations.push(...this.buildPerGame(plan, plans, member.id, member.roles, games));
         }
       }
     }
-    return { created };
+    if (!obligations.length) return { created: 0 };
+    const existing = await this.prisma.collectionObligation.findMany({
+      where: {
+        teamId,
+        OR: [
+          { competence: { gte: this.monthStart(from), lte: this.monthStart(to) } },
+          ...(games.length ? [{ gameId: { in: games.map((game) => game.id) } }] : []),
+        ],
+      },
+      select: { planId: true, memberId: true, competence: true, gameId: true },
+    });
+    const existingKeys = new Set(existing.map((item) => this.obligationKey(item)));
+    const pending = obligations.filter((item) => !existingKeys.has(this.obligationKey(item)));
+    if (!pending.length) return { created: 0 };
+    const result = await this.prisma.collectionObligation.createMany({ data: pending, skipDuplicates: true });
+    return { created: result.count };
   }
 
-  private async generateMonthly(plan: PlanWithRates, plans: PlanWithRates[], memberId: string, roles: MemberRoleAssignment[], from: Date, to: Date) {
-    let created = 0;
+  private buildMonthly(plan: PlanWithRates, plans: PlanWithRates[], memberId: string, roles: MemberRoleAssignment[], from: Date, to: Date) {
+    const obligations: Prisma.CollectionObligationCreateManyInput[] = [];
     for (const competence of this.monthsBetween(from, to)) {
       const dueDate = new Date(Date.UTC(competence.getUTCFullYear(), competence.getUTCMonth(), plan.dueDay ?? 20));
       const referenceDate = plan.prorationPolicy === ProrationPolicy.FULL_AMOUNT
@@ -58,45 +73,33 @@ export class CollectionsGenerationService {
       if (!this.planWinsAt(plan, plans, roles, referenceDate)) continue;
       const rate = this.rateAt(plan.rates, referenceDate);
       if (!rate) continue;
-      const result = await this.prisma.collectionObligation.upsert({
-        where: { planId_memberId_competence: { planId: plan.id, memberId, competence } },
-        create: {
-          teamId: plan.teamId, planId: plan.id, memberId, competence, dueDate,
-          roleSnapshot: plan.audienceRole, originalAmount: rate.amount, expectedAmount: rate.amount,
-        },
-        update: {},
-        select: { createdAt: true, updatedAt: true },
+      obligations.push({
+        teamId: plan.teamId, planId: plan.id, memberId, competence, dueDate,
+        roleSnapshot: plan.audienceRole, originalAmount: rate.amount, expectedAmount: rate.amount,
       });
-      if (result.createdAt.getTime() === result.updatedAt.getTime()) created++;
     }
-    return created;
+    return obligations;
   }
 
-  private async generatePerGame(
+  private buildPerGame(
     plan: PlanWithRates,
     plans: PlanWithRates[],
     memberId: string,
     roles: MemberRoleAssignment[],
     games: Array<{ id: string; date: Date; expectedContributionPerDirector: Prisma.Decimal }>,
   ) {
-    let created = 0;
+    const obligations: Prisma.CollectionObligationCreateManyInput[] = [];
     for (const game of games) {
       if (!this.planWinsAt(plan, plans, roles, game.date)) continue;
       const rate = this.rateAt(plan.rates, game.date);
       const amount = plan.audienceRole === 'DIRECTOR' ? game.expectedContributionPerDirector : rate?.amount;
       if (!amount) continue;
-      const result = await this.prisma.collectionObligation.upsert({
-        where: { planId_memberId_gameId: { planId: plan.id, memberId, gameId: game.id } },
-        create: {
-          teamId: plan.teamId, planId: plan.id, memberId, gameId: game.id, dueDate: game.date,
-          roleSnapshot: plan.audienceRole, originalAmount: amount, expectedAmount: amount,
-        },
-        update: {},
-        select: { createdAt: true, updatedAt: true },
+      obligations.push({
+        teamId: plan.teamId, planId: plan.id, memberId, gameId: game.id, dueDate: game.date,
+        roleSnapshot: plan.audienceRole, originalAmount: amount, expectedAmount: amount,
       });
-      if (result.createdAt.getTime() === result.updatedAt.getTime()) created++;
     }
-    return created;
+    return obligations;
   }
 
   private planWinsAt(plan: PlanWithRates, plans: PlanWithRates[], roles: MemberRoleAssignment[], date: Date) {
@@ -130,6 +133,15 @@ export class CollectionsGenerationService {
       cursor = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() + 1, 1));
     }
     return months;
+  }
+
+  private monthStart(value: Date) {
+    return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), 1));
+  }
+
+  private obligationKey(item: { planId: string; memberId: string; competence?: Date | string | null; gameId?: string | null }) {
+    const competence = item.competence ? new Date(item.competence).toISOString().slice(0, 10) : '';
+    return `${item.planId}:${item.memberId}:${item.gameId ?? competence}`;
   }
 
   private dateOnly(value: string) {
