@@ -27,12 +27,17 @@ export class CollectionsMaintenanceService implements OnModuleInit, OnModuleDest
   }
 
   async runNow(now = new Date()) {
-    const { start: currentMonthStart, end: to } = this.currentMonth(now);
+    const { today, start: currentMonthStart, end: to } = this.currentPeriod(now);
+    const todayDate = new Date(`${today}T00:00:00.000Z`);
     const currentMonthStartDate = new Date(`${currentMonthStart}T00:00:00.000Z`);
     const toDate = new Date(`${to}T00:00:00.000Z`);
     const teams = await this.prisma.team.findMany({
       where: {
         active: true,
+        OR: [
+          { collectionsMaintainedOn: null },
+          { collectionsMaintainedOn: { lt: todayDate } },
+        ],
         collectionPlans: { some: { effectiveFrom: { lte: toDate } } },
       },
       select: {
@@ -57,7 +62,7 @@ export class CollectionsMaintenanceService implements OnModuleInit, OnModuleDest
             : currentMonthStart;
         await this.generation.generate(team.id, from, to);
         await this.ledger.applyAvailableCredits(team.id);
-        await this.updateWatermark(team.id, toDate);
+        await this.updateMaintenanceState(team.id, toDate, todayDate);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         this.logger.error(`Falha na manutenção automática de arrecadações do time ${team.id}: ${message}`);
@@ -74,7 +79,7 @@ export class CollectionsMaintenanceService implements OnModuleInit, OnModuleDest
     }
   }
 
-  private currentMonth(now: Date) {
+  private currentPeriod(now: Date) {
     const current = new Intl.DateTimeFormat('en-CA', {
       timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit',
     }).format(now);
@@ -82,6 +87,7 @@ export class CollectionsMaintenanceService implements OnModuleInit, OnModuleDest
     const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
     const prefix = `${year}-${String(month).padStart(2, '0')}`;
     return {
+      today: current,
       start: `${prefix}-01`,
       end: `${prefix}-${String(lastDay).padStart(2, '0')}`,
     };
@@ -93,10 +99,13 @@ export class CollectionsMaintenanceService implements OnModuleInit, OnModuleDest
     return next.toISOString().slice(0, 10);
   }
 
-  private updateWatermark(teamId: string, through: Date) {
+  private updateMaintenanceState(teamId: string, through: Date, maintainedOn: Date) {
     return this.prisma.team.update({
       where: { id: teamId },
-      data: { collectionsGeneratedThrough: through },
+      data: {
+        collectionsGeneratedThrough: through,
+        collectionsMaintainedOn: maintainedOn,
+      },
     });
   }
 }

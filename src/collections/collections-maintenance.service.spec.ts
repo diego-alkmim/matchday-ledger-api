@@ -28,6 +28,10 @@ describe('CollectionsMaintenanceService', () => {
     expect(teamFindMany).toHaveBeenCalledWith({
       where: {
         active: true,
+        OR: [
+          { collectionsMaintainedOn: null },
+          { collectionsMaintainedOn: { lt: new Date('2026-09-29T00:00:00.000Z') } },
+        ],
         collectionPlans: {
           some: { effectiveFrom: { lte: new Date('2026-09-30T00:00:00.000Z') } },
         },
@@ -45,8 +49,21 @@ describe('CollectionsMaintenanceService', () => {
     expect(applyAvailableCredits).toHaveBeenCalledWith('team-1');
     expect(teamUpdate).toHaveBeenCalledWith({
       where: { id: 'team-1' },
-      data: { collectionsGeneratedThrough: new Date('2026-09-30T00:00:00.000Z') },
+      data: {
+        collectionsGeneratedThrough: new Date('2026-09-30T00:00:00.000Z'),
+        collectionsMaintainedOn: new Date('2026-09-29T00:00:00.000Z'),
+      },
     });
+  });
+
+  it('does not run heavy maintenance again when every team was maintained today', async () => {
+    teamFindMany.mockResolvedValue([]);
+
+    await service.runNow(new Date('2026-09-29T22:00:00.000Z'));
+
+    expect(generate).not.toHaveBeenCalled();
+    expect(applyAvailableCredits).not.toHaveBeenCalled();
+    expect(teamUpdate).not.toHaveBeenCalled();
   });
 
   it('generates only the period after the persisted watermark', async () => {

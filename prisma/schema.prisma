@@ -90,6 +90,7 @@ model Team {
   contributionMode               ContributionMode @default(PER_GAME)
   monthlyContributionPerDirector Decimal          @default(70) @db.Decimal(10, 2)
   collectionsGeneratedThrough    DateTime?        @db.Date
+  collectionsMaintainedOn        DateTime?        @db.Date
   createdAt                      DateTime         @default(now())
   updatedAt                      DateTime         @updatedAt
   memberships                    TeamMembership[]
