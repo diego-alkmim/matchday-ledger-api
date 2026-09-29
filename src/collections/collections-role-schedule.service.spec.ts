@@ -19,7 +19,7 @@ describe('CollectionsRoleScheduleService', () => {
     runSerializable: jest.fn((operation: (client: typeof tx) => Promise<unknown>) => operation(tx)),
     reconcileInTransaction: jest.fn(),
   } as unknown as CollectionsReconciliationService;
-  const generateInTransaction = jest.fn();
+  const generateInTransaction = jest.fn().mockResolvedValue({ created: 1 });
   const applyAvailableCreditsInTransaction = jest.fn();
   const generation = { generateInTransaction } as unknown as CollectionsGenerationService;
   const ledger = { applyAvailableCreditsInTransaction } as unknown as CollectionsLedgerService;
@@ -61,9 +61,9 @@ describe('CollectionsRoleScheduleService', () => {
     await service.reschedule('team-1', 'member-1', 'role-future', '2026-09-29', 'user-1');
 
     expect(generateInTransaction).toHaveBeenCalledWith(
-      tx, 'team-1', '2026-09-29', '2026-09-29',
+      tx, 'team-1', '2026-09-29', '2026-09-29', 'member-1',
     );
-    expect(applyAvailableCreditsInTransaction).toHaveBeenCalledWith(tx, 'team-1');
+    expect(applyAvailableCreditsInTransaction).toHaveBeenCalledWith(tx, 'team-1', 'member-1');
   });
 
   it('rejects a new date that overlaps another period of the same role', async () => {

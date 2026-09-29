@@ -103,6 +103,27 @@ describe('GamesService tenant isolation', () => {
     });
   });
 
+  it('rejects partial activity periods before querying the database', async () => {
+    await expect(service.list('team-1', {
+      activityFrom: '2026-09-01',
+      compact: false,
+    })).rejects.toThrow('Informe as datas inicial e final do per\u00edodo.');
+
+    expect(findMany).not.toHaveBeenCalled();
+  });
+
+  it('rejects oversized activity periods before querying the database', async () => {
+    await expect(service.list('team-1', {
+      activityFrom: '2025-01-01',
+      activityTo: '2026-01-02',
+      compact: false,
+    })).rejects.toThrow(
+      'O per\u00edodo deve ter no m\u00e1ximo 366 dias e a data inicial n\u00e3o pode superar a final.',
+    );
+
+    expect(findMany).not.toHaveBeenCalled();
+  });
+
   it('blocks financial game changes after a transaction exists', async () => {
     findUnique.mockResolvedValue({
       id: 'game-1', date: new Date('2026-09-26'), expectedContributionPerDirector: 70,

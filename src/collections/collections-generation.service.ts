@@ -24,8 +24,9 @@ export class CollectionsGenerationService {
     teamId: string,
     fromInput: string,
     toInput: string,
+    memberId?: string,
   ) {
-    return this.generateWithClient(tx, teamId, fromInput, toInput);
+    return this.generateWithClient(tx, teamId, fromInput, toInput, undefined, memberId);
   }
 
   private async generateWithClient(
@@ -34,6 +35,7 @@ export class CollectionsGenerationService {
     fromInput: string,
     toInput: string,
     maxDays?: number,
+    memberId?: string,
   ) {
     const from = this.dateOnly(fromInput);
     const to = this.dateOnly(toInput);
@@ -50,7 +52,7 @@ export class CollectionsGenerationService {
         orderBy: { priority: 'desc' },
       }),
       client.member.findMany({
-        where: { teamId, activeFrom: { lte: to } },
+        where: { teamId, activeFrom: { lte: to }, ...(memberId ? { id: memberId } : {}) },
         include: { roles: true },
       }),
       client.game.findMany({ where: { teamId, date: { gte: from, lte: this.endOfDay(to) } }, orderBy: { date: 'asc' } }),
@@ -70,6 +72,7 @@ export class CollectionsGenerationService {
     const existing = await client.collectionObligation.findMany({
       where: {
         teamId,
+        ...(memberId ? { memberId } : {}),
         OR: [
           { competence: { gte: this.monthStart(from), lte: this.monthStart(to) } },
           ...(games.length ? [{ gameId: { in: games.map((game) => game.id) } }] : []),

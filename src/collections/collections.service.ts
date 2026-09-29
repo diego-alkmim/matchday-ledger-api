@@ -62,7 +62,7 @@ export class CollectionsService {
         });
       }
       await generateObligationsThroughToday(
-        this.generation, this.ledger, tx, teamId, new Date(dto.activeFrom), collectionToday(),
+        this.generation, this.ledger, tx, teamId, new Date(dto.activeFrom), collectionToday(), member.id,
       );
       return member;
     });
@@ -134,7 +134,7 @@ export class CollectionsService {
       }
       await this.reconciliation.reconcileInTransaction(tx, teamId, actorId, memberId);
       await generateObligationsThroughToday(
-        this.generation, this.ledger, tx, teamId, startDate, collectionToday(),
+        this.generation, this.ledger, tx, teamId, startDate, collectionToday(), memberId,
       );
       return assignment;
     });

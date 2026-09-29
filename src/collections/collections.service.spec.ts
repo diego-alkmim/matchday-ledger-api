@@ -36,7 +36,9 @@ describe('CollectionsService effective periods', () => {
     runSerializable: jest.fn((operation: (client: typeof tx) => Promise<unknown>) => operation(tx)),
     reconcileInTransaction: jest.fn(),
   } as unknown as CollectionsReconciliationService;
-  const generation = { generateInTransaction: jest.fn() } as unknown as CollectionsGenerationService;
+  const generation = {
+    generateInTransaction: jest.fn().mockResolvedValue({ created: 1 }),
+  } as unknown as CollectionsGenerationService;
   const ledger = {
     applyAvailableCreditsInTransaction: jest.fn(),
     recalculateObligationInTransaction: jest.fn(),
@@ -58,8 +60,9 @@ describe('CollectionsService effective periods', () => {
       'team-1',
       '2026-09-01',
       expect.any(String),
+      'member-1',
     );
-    expect(ledger.applyAvailableCreditsInTransaction).toHaveBeenCalledWith(tx, 'team-1');
+    expect(ledger.applyAvailableCreditsInTransaction).toHaveBeenCalledWith(tx, 'team-1', 'member-1');
   });
 
   it('rejects an overlapping role period', async () => {

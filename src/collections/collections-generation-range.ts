@@ -9,13 +9,17 @@ export async function generateObligationsThroughToday(
   teamId: string,
   from: Date,
   today: Date,
+  memberId?: string,
 ) {
   if (from > today) return;
-  await generation.generateInTransaction(
+  const result = await generation.generateInTransaction(
     tx,
     teamId,
     from.toISOString().slice(0, 10),
     today.toISOString().slice(0, 10),
+    memberId,
   );
-  await ledger.applyAvailableCreditsInTransaction(tx, teamId);
+  if (result.created > 0) {
+    await ledger.applyAvailableCreditsInTransaction(tx, teamId, memberId);
+  }
 }

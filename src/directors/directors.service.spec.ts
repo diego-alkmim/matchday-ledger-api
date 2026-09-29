@@ -77,8 +77,9 @@ describe('DirectorsService collection role lifecycle', () => {
       'team-1',
       expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
       expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+      'member-1',
     );
-    expect(ledger.applyAvailableCreditsInTransaction).toHaveBeenCalledWith(tx, 'team-1');
+    expect(ledger.applyAvailableCreditsInTransaction).toHaveBeenCalledWith(tx, 'team-1', 'member-1');
   });
 
   it('does not regenerate obligations when an already active director is edited', async () => {

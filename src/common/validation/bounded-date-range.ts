@@ -11,3 +11,14 @@ export function assertBoundedDateRange(from: string, to: string, maxDays = 366) 
   }
   return { start, end, days };
 }
+
+export function assertOptionalBoundedDateRange(
+  from: string | undefined,
+  to: string | undefined,
+  maxDays = 366,
+) {
+  if ((from && !to) || (!from && to)) {
+    throw new BadRequestException('Informe as datas inicial e final do per\u00edodo.');
+  }
+  return from && to ? assertBoundedDateRange(from, to, maxDays) : undefined;
+}

@@ -8,6 +8,7 @@ import { CollectionsReconciliationService } from '../collections/collections-rec
 import { CreateGameDto } from './dto/create-game.dto';
 import { UpdateGameDto } from './dto/update-game.dto';
 import { ListGamesQueryDto } from './dto/list-games-query.dto';
+import { assertOptionalBoundedDateRange } from '../common/validation/bounded-date-range';
 
 @Injectable()
 export class GamesService {
@@ -19,6 +20,8 @@ export class GamesService {
   ) {}
 
   async list(teamId: string, query: ListGamesQueryDto = new ListGamesQueryDto()) {
+    assertOptionalBoundedDateRange(query.from, query.to);
+    assertOptionalBoundedDateRange(query.activityFrom, query.activityTo);
     const date = {
       ...(query.from ? { gte: new Date(`${query.from}T00:00:00.000-03:00`) } : {}),
       ...(query.to ? { lte: new Date(`${query.to}T23:59:59.999-03:00`) } : {}),

@@ -25,7 +25,7 @@ describe('Tenant isolation for team-owned records', () => {
     reconcileInTransaction: jest.fn(),
     runSerializable: jest.fn((callback: (tx: unknown) => Promise<unknown>) => callback(prisma)),
   } as unknown as CollectionsReconciliationService;
-  const generation = { generateInTransaction: jest.fn() };
+  const generation = { generateInTransaction: jest.fn().mockResolvedValue({ created: 1 }) };
   const ledger = { applyAvailableCreditsInTransaction: jest.fn() };
   const directors = new DirectorsService(
     prisma, reconciliation, generation as never, ledger as never,
@@ -76,6 +76,10 @@ describe('Tenant isolation for team-owned records', () => {
       'team-b',
       expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
       expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+      'member-1',
+    );
+    expect(ledger.applyAvailableCreditsInTransaction).toHaveBeenCalledWith(
+      prisma, 'team-b', 'member-1',
     );
   });
 });

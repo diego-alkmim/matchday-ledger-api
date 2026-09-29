@@ -74,6 +74,22 @@ describe('CollectionsGenerationService', () => {
     expect(memberFindMany).not.toHaveBeenCalled();
     expect(gameFindMany).not.toHaveBeenCalled();
   });
+
+  it('limits member-specific generation queries to the requested member', async () => {
+    planFindMany.mockResolvedValue([plan('director-plan', MemberRole.DIRECTOR, 100)]);
+    memberFindMany.mockResolvedValue([{ id: 'member-1', roles: [role(MemberRole.DIRECTOR)] }]);
+
+    await service.generateInTransaction(
+      prisma, 'team-1', '2026-09-01', '2026-09-30', 'member-1',
+    );
+
+    expect(memberFindMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { teamId: 'team-1', activeFrom: { lte: new Date('2026-09-30') }, id: 'member-1' },
+    }));
+    expect(obligationFindMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ teamId: 'team-1', memberId: 'member-1' }),
+    }));
+  });
 });
 
 function plan(id: string, audienceRole: MemberRole, priority: number, frequency: CollectionFrequency = CollectionFrequency.MONTHLY) {

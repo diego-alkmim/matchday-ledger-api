@@ -74,7 +74,7 @@ export class DirectorsService {
       await this.reconciliation.reconcileInTransaction(tx, teamId, actorId, member.id);
       if (data.active !== false) {
         await generateObligationsThroughToday(
-          this.generation, this.ledger, tx, teamId, activeFrom, collectionToday(),
+          this.generation, this.ledger, tx, teamId, activeFrom, collectionToday(), member.id,
         );
       }
       return director;
@@ -140,7 +140,7 @@ export class DirectorsService {
         await this.reconciliation.reconcileInTransaction(tx, teamId, actorId, director.memberId);
         if (data.active && (!currentDirector.active || directorRoleActivated)) {
           await generateObligationsThroughToday(
-            this.generation, this.ledger, tx, teamId, collectionToday(), collectionToday(),
+            this.generation, this.ledger, tx, teamId, collectionToday(), collectionToday(), director.memberId,
           );
         }
       }

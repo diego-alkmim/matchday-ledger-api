@@ -58,6 +58,7 @@ export class CollectionsRoleScheduleService {
         teamId,
         startDate,
         today,
+        memberId,
       );
       return updated;
     });
