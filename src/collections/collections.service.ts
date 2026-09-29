@@ -13,6 +13,7 @@ import { CollectionsLedgerService } from './collections-ledger.service';
 import { refreshUntouchedObligationsForRate } from './collection-rate-recalculation';
 import { generateObligationsThroughToday } from './collections-generation-range';
 import { collectionToday } from './collection-date';
+import { findRoleAssignmentForEnd } from './collection-role-assignment';
 
 @Injectable()
 export class CollectionsService {
@@ -140,22 +141,20 @@ export class CollectionsService {
     return result;
   }
 
-  async endMemberRole(teamId: string, memberId: string, role: MemberRole, endsAt: string, actorId: string) {
+  async endMemberRole(
+    teamId: string,
+    memberId: string,
+    role: MemberRole,
+    endsAt: string,
+    actorId: string,
+    assignmentId?: string,
+  ) {
     const endDate = new Date(endsAt);
     const today = collectionToday();
     const result = await this.reconciliation.runSerializable(async (tx) => {
-      let assignment = await tx.memberRoleAssignment.findFirst({
-        where: {
-          teamId, memberId, role,
-          startsAt: { lte: today },
-          OR: [{ endsAt: null }, { endsAt: { gte: today } }],
-        },
-        orderBy: { startsAt: 'desc' },
-      });
-      assignment ??= await tx.memberRoleAssignment.findFirst({
-        where: { teamId, memberId, role, startsAt: { gt: today } },
-        orderBy: { startsAt: 'asc' },
-      });
+      const assignment = await findRoleAssignmentForEnd(
+        tx, teamId, memberId, role, today, assignmentId,
+      );
       if (!assignment) throw new NotFoundException('Função ativa não encontrada.');
       if (endDate < assignment.startsAt) {
         await tx.memberRoleAssignment.delete({ where: { id: assignment.id } });
@@ -251,7 +250,7 @@ export class CollectionsService {
       const rate = await tx.collectionPlanRate.create({
         data: { planId, amount: dto.amount, effectiveFrom },
       });
-      await refreshUntouchedObligationsForRate(tx, teamId, plan, rate);
+      await refreshUntouchedObligationsForRate(tx, teamId, plan, rate, this.ledger);
       await this.ledger.applyAvailableCreditsInTransaction(tx, teamId);
       return rate;
     });

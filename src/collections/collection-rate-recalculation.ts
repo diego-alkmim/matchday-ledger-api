@@ -3,10 +3,10 @@ import {
   CollectionPlan,
   CollectionPlanRate,
   MemberRole,
-  ObligationStatus,
   Prisma,
   ProrationPolicy,
 } from '@prisma/client';
+import { CollectionsLedgerService } from './collections-ledger.service';
 
 type PlanWithRates = CollectionPlan & { rates: CollectionPlanRate[] };
 
@@ -15,20 +15,19 @@ export async function refreshUntouchedObligationsForRate(
   teamId: string,
   plan: PlanWithRates,
   rate: CollectionPlanRate,
+  ledger: CollectionsLedgerService,
 ) {
   if (plan.frequency === CollectionFrequency.PER_GAME && plan.audienceRole === MemberRole.DIRECTOR) return;
   const obligations = await tx.collectionObligation.findMany({
     where: { teamId, planId: plan.id },
     select: {
-      id: true, competence: true, dueDate: true,
-      _count: { select: { allocations: true, adjustments: true } },
+      id: true, competence: true, dueDate: true, originalAmount: true,
     },
   });
   const rates = [...plan.rates, rate].sort(
     (first, second) => first.effectiveFrom.getTime() - second.effectiveFrom.getTime(),
   );
   for (const obligation of obligations) {
-    if (obligation._count.allocations > 0 || obligation._count.adjustments > 0) continue;
     const referenceDate = rateReferenceDate(
       plan.frequency,
       plan.prorationPolicy,
@@ -36,17 +35,12 @@ export async function refreshUntouchedObligationsForRate(
       obligation.dueDate,
     );
     const applicableRate = [...rates].reverse().find((item) => item.effectiveFrom <= referenceDate);
-    if (!applicableRate) continue;
+    if (!applicableRate || obligation.originalAmount.equals(applicableRate.amount)) continue;
     await tx.collectionObligation.update({
       where: { id: obligation.id },
-      data: {
-        originalAmount: applicableRate.amount,
-        expectedAmount: applicableRate.amount,
-        adjustmentAmount: 0,
-        allocatedAmount: 0,
-        status: ObligationStatus.OPEN,
-      },
+      data: { originalAmount: applicableRate.amount },
     });
+    await ledger.recalculateObligationInTransaction(tx, obligation.id);
   }
 }
 

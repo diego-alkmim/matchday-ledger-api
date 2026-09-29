@@ -14,15 +14,35 @@ describe('CollectionsMaintenanceService', () => {
 
   beforeEach(() => jest.clearAllMocks());
 
-  it('generates the current month and applies credits for every active team', async () => {
-    teamFindMany.mockResolvedValue([{ id: 'team-1' }, { id: 'team-2' }]);
+  it('backfills every month since the earliest plan and applies credits', async () => {
+    teamFindMany.mockResolvedValue([
+      { id: 'team-1', collectionPlans: [{ effectiveFrom: new Date('2026-07-01') }] },
+      { id: 'team-2', collectionPlans: [{ effectiveFrom: new Date('2026-09-01') }] },
+    ]);
 
     await service.runNow(new Date('2026-09-29T15:00:00.000Z'));
 
-    expect(teamFindMany).toHaveBeenCalledWith({ where: { active: true }, select: { id: true } });
-    expect(generate).toHaveBeenNthCalledWith(1, 'team-1', '2026-09-01', '2026-09-30');
+    expect(teamFindMany).toHaveBeenCalledWith({
+      where: { active: true },
+      select: {
+        id: true,
+        collectionPlans: {
+          orderBy: { effectiveFrom: 'asc' }, take: 1, select: { effectiveFrom: true },
+        },
+      },
+    });
+    expect(generate).toHaveBeenNthCalledWith(1, 'team-1', '2026-07-01', '2026-09-30');
     expect(generate).toHaveBeenNthCalledWith(2, 'team-2', '2026-09-01', '2026-09-30');
     expect(applyAvailableCredits).toHaveBeenCalledTimes(2);
+  });
+
+  it('ignores teams without collection plans', async () => {
+    teamFindMany.mockResolvedValue([{ id: 'team-1', collectionPlans: [] }]);
+
+    await service.runNow(new Date('2026-09-29T15:00:00.000Z'));
+
+    expect(generate).not.toHaveBeenCalled();
+    expect(applyAvailableCredits).not.toHaveBeenCalled();
   });
 
   it('starts automatic maintenance during module initialization', () => {

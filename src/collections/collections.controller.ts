@@ -9,6 +9,7 @@ import { ParseCuidPipe } from '../common/pipes/parse-cuid.pipe';
 import { CollectionsGenerationService } from './collections-generation.service';
 import { CollectionsLedgerService } from './collections-ledger.service';
 import { CollectionsService } from './collections.service';
+import { CollectionsRoleScheduleService } from './collections-role-schedule.service';
 import {
   AddPlanRateDto,
   AdjustObligationDto,
@@ -31,6 +32,7 @@ export class CollectionsController {
     private service: CollectionsService,
     private generation: CollectionsGenerationService,
     private ledger: CollectionsLedgerService,
+    private roleSchedule: CollectionsRoleScheduleService,
   ) {}
 
   @Get('summary')
@@ -65,7 +67,18 @@ export class CollectionsController {
   @Patch('members/:id/roles/end')
   @Roles(Role.ADMIN)
   endMemberRole(@Param('id', ParseCuidPipe) id: string, @Body() dto: ChangeMemberRoleDto, @CurrentUser() user: AccessTokenPayload) {
-    return this.service.endMemberRole(user.teamId, id, dto.role, dto.date, user.sub);
+    return this.service.endMemberRole(user.teamId, id, dto.role, dto.date, user.sub, dto.assignmentId);
+  }
+
+  @Patch('members/:id/roles/:assignmentId')
+  @Roles(Role.ADMIN)
+  rescheduleMemberRole(
+    @Param('id', ParseCuidPipe) id: string,
+    @Param('assignmentId', ParseCuidPipe) assignmentId: string,
+    @Body() dto: EffectiveDateDto,
+    @CurrentUser() user: AccessTokenPayload,
+  ) {
+    return this.roleSchedule.reschedule(user.teamId, id, assignmentId, dto.date, user.sub);
   }
 
   @Get('plans')

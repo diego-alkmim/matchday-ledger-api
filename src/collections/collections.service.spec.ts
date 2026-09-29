@@ -1,4 +1,4 @@
-import { CollectionFrequency, MemberRole, ObligationStatus, ProrationPolicy, Prisma } from '@prisma/client';
+import { CollectionFrequency, MemberRole, ProrationPolicy, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CollectionsReconciliationService } from './collections-reconciliation.service';
 import { CollectionsService } from './collections.service';
@@ -37,7 +37,10 @@ describe('CollectionsService effective periods', () => {
     reconcileInTransaction: jest.fn(),
   } as unknown as CollectionsReconciliationService;
   const generation = { generateInTransaction: jest.fn() } as unknown as CollectionsGenerationService;
-  const ledger = { applyAvailableCreditsInTransaction: jest.fn() } as unknown as CollectionsLedgerService;
+  const ledger = {
+    applyAvailableCreditsInTransaction: jest.fn(),
+    recalculateObligationInTransaction: jest.fn(),
+  } as unknown as CollectionsLedgerService;
   const service = new CollectionsService(prisma, reconciliation, generation, ledger);
 
   beforeEach(() => jest.clearAllMocks());
@@ -149,22 +152,20 @@ describe('CollectionsService effective periods', () => {
     });
     obligationFindMany.mockResolvedValue([{
       id: 'obligation-1', competence: new Date('2026-09-01'), dueDate: new Date('2026-09-20'),
-      _count: { allocations: 0, adjustments: 0 },
+      originalAmount: new Prisma.Decimal(50),
     }]);
 
     await service.addRate('team-1', 'plan-1', { amount: 70, effectiveFrom: '2026-09-01' });
 
     expect(obligationUpdate).toHaveBeenCalledWith({
       where: { id: 'obligation-1' },
-      data: expect.objectContaining({
-        originalAmount: new Prisma.Decimal(70), expectedAmount: new Prisma.Decimal(70),
-        status: ObligationStatus.OPEN,
-      }),
+      data: { originalAmount: new Prisma.Decimal(70) },
     });
+    expect(ledger.recalculateObligationInTransaction).toHaveBeenCalledWith(tx, 'obligation-1');
     expect(ledger.applyAvailableCreditsInTransaction).toHaveBeenCalledWith(tx, 'team-1');
   });
 
-  it('preserves obligations that already have financial history when adding a rate', async () => {
+  it('recalculates prepaid obligations when a new rate becomes effective', async () => {
     planFindUnique.mockResolvedValue({
       id: 'plan-1', teamId: 'team-1', audienceRole: MemberRole.PLAYER,
       frequency: CollectionFrequency.MONTHLY, prorationPolicy: ProrationPolicy.DUE_DATE_CUTOFF,
@@ -175,11 +176,31 @@ describe('CollectionsService effective periods', () => {
     });
     obligationFindMany.mockResolvedValue([{
       id: 'obligation-1', competence: new Date('2026-09-01'), dueDate: new Date('2026-09-20'),
-      _count: { allocations: 1, adjustments: 0 },
+      originalAmount: new Prisma.Decimal(50),
     }]);
 
     await service.addRate('team-1', 'plan-1', { amount: 70, effectiveFrom: '2026-09-01' });
 
-    expect(obligationUpdate).not.toHaveBeenCalled();
+    expect(obligationUpdate).toHaveBeenCalledWith({
+      where: { id: 'obligation-1' }, data: { originalAmount: new Prisma.Decimal(70) },
+    });
+    expect(ledger.recalculateObligationInTransaction).toHaveBeenCalledWith(tx, 'obligation-1');
+  });
+
+  it('targets a future role by assignment id even when a current role exists', async () => {
+    roleFindFirst.mockResolvedValue({ id: 'future-role', startsAt: new Date('2026-10-10') });
+    roleCount.mockResolvedValue(1);
+
+    await service.endMemberRole(
+      'team-1', 'member-1', MemberRole.PLAYER, '2026-09-29', 'user-1', 'future-role',
+    );
+
+    expect(roleFindFirst).toHaveBeenCalledWith({
+      where: {
+        id: 'future-role', teamId: 'team-1', memberId: 'member-1', role: MemberRole.PLAYER,
+      },
+    });
+    expect(roleDelete).toHaveBeenCalledWith({ where: { id: 'future-role' } });
+    expect(roleUpdate).not.toHaveBeenCalled();
   });
 });

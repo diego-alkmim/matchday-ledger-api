@@ -3,7 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CollectionsGenerationService } from './collections-generation.service';
 import { CollectionsLedgerService } from './collections-ledger.service';
 
-const MAINTENANCE_INTERVAL_MS = 60 * 60 * 1000;
+const MAINTENANCE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 @Injectable()
 export class CollectionsMaintenanceService implements OnModuleInit, OnModuleDestroy {
@@ -27,11 +27,27 @@ export class CollectionsMaintenanceService implements OnModuleInit, OnModuleDest
   }
 
   async runNow(now = new Date()) {
-    const { from, to } = this.currentMonth(now);
-    const teams = await this.prisma.team.findMany({ where: { active: true }, select: { id: true } });
+    const to = this.currentMonthEnd(now);
+    const teams = await this.prisma.team.findMany({
+      where: { active: true },
+      select: {
+        id: true,
+        collectionPlans: {
+          orderBy: { effectiveFrom: 'asc' },
+          take: 1,
+          select: { effectiveFrom: true },
+        },
+      },
+    });
     for (const team of teams) {
+      const earliestPlan = team.collectionPlans[0];
+      if (!earliestPlan) continue;
       try {
-        await this.generation.generate(team.id, from, to);
+        await this.generation.generate(
+          team.id,
+          earliestPlan.effectiveFrom.toISOString().slice(0, 10),
+          to,
+        );
         await this.ledger.applyAvailableCredits(team.id);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -49,15 +65,12 @@ export class CollectionsMaintenanceService implements OnModuleInit, OnModuleDest
     }
   }
 
-  private currentMonth(now: Date) {
+  private currentMonthEnd(now: Date) {
     const current = new Intl.DateTimeFormat('en-CA', {
       timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit',
     }).format(now);
     const [year, month] = current.split('-').map(Number);
     const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
-    return {
-      from: `${year}-${String(month).padStart(2, '0')}-01`,
-      to: `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`,
-    };
+    return `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
   }
 }

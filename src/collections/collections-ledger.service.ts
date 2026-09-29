@@ -122,6 +122,10 @@ export class CollectionsLedgerService {
     return this.recalculateObligation(tx, obligationId);
   }
 
+  recalculateObligationInTransaction(tx: Prisma.TransactionClient, obligationId: string) {
+    return this.recalculateObligation(tx, obligationId);
+  }
+
   async reversePayment(id: string, reason: string, user: AccessTokenPayload) {
     return runSerializable(this.prisma, async (tx) => {
       const payment = await tx.collectionPayment.findUnique({

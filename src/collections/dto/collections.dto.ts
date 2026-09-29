@@ -90,4 +90,5 @@ export class EffectiveDateDto {
 
 export class ChangeMemberRoleDto extends EffectiveDateDto {
   @IsEnum(MemberRole) role!: MemberRole;
+  @IsOptional() @IsString() @IsCuid('assignmentId') assignmentId?: string;
 }
