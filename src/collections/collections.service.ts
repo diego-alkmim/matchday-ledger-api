@@ -3,12 +3,16 @@ import { CategoryType, MemberRole, ObligationStatus, Prisma } from '@prisma/clie
 import { PrismaService } from '../prisma/prisma.service';
 import { AddPlanRateDto, CreateMemberDto, CreatePlanDto } from './dto/collections.dto';
 import { CollectionsReconciliationService } from './collections-reconciliation.service';
+import { CollectionsGenerationService } from './collections-generation.service';
+import { CollectionsLedgerService } from './collections-ledger.service';
 
 @Injectable()
 export class CollectionsService {
   constructor(
     private prisma: PrismaService,
     private reconciliation: CollectionsReconciliationService,
+    private generation: CollectionsGenerationService,
+    private ledger: CollectionsLedgerService,
   ) {}
 
   async listMembers(teamId: string) {
@@ -35,7 +39,7 @@ export class CollectionsService {
   }
 
   createMember(teamId: string, dto: CreateMemberDto) {
-    return this.prisma.$transaction(async (tx) => {
+    return this.reconciliation.runSerializable(async (tx) => {
       const member = await tx.member.create({
         data: {
           teamId, name: dto.name.trim(), contact: dto.contact?.trim(), activeFrom: new Date(dto.activeFrom),
@@ -48,6 +52,7 @@ export class CollectionsService {
           data: { teamId, memberId: member.id, name: member.name, contact: member.contact },
         });
       }
+      await this.generateObligationsInTransaction(tx, teamId, new Date(dto.activeFrom));
       return member;
     });
   }
@@ -106,6 +111,7 @@ export class CollectionsService {
         }
       }
       await this.reconciliation.reconcileInTransaction(tx, teamId, actorId);
+      await this.generateObligationsInTransaction(tx, teamId, startDate);
       return assignment;
     });
     return result;
@@ -116,7 +122,11 @@ export class CollectionsService {
     const today = this.today();
     const result = await this.reconciliation.runSerializable(async (tx) => {
       const assignment = await tx.memberRoleAssignment.findFirst({
-        where: { teamId, memberId, role, endsAt: null },
+        where: {
+          teamId, memberId, role,
+          startsAt: { lte: today },
+          OR: [{ endsAt: null }, { endsAt: { gte: today } }],
+        },
         orderBy: { startsAt: 'desc' },
       });
       if (!assignment) throw new NotFoundException('Função ativa não encontrada.');
@@ -183,6 +193,7 @@ export class CollectionsService {
         include: { rates: true, category: true },
       });
       await this.reconciliation.reconcileInTransaction(tx, teamId, actorId);
+      await this.generateObligationsInTransaction(tx, teamId, new Date(dto.effectiveFrom));
       return plan;
     });
   }
@@ -290,5 +301,21 @@ export class CollectionsService {
       day: '2-digit',
     }).format(new Date());
     return new Date(`${value}T00:00:00.000Z`);
+  }
+
+  private async generateObligationsInTransaction(
+    tx: Prisma.TransactionClient,
+    teamId: string,
+    from: Date,
+  ) {
+    const to = this.today();
+    if (from > to) return;
+    await this.generation.generateInTransaction(
+      tx,
+      teamId,
+      from.toISOString().slice(0, 10),
+      to.toISOString().slice(0, 10),
+    );
+    await this.ledger.applyAvailableCreditsInTransaction(tx, teamId);
   }
 }

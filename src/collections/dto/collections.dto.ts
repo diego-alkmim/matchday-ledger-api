@@ -17,6 +17,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  IsUUID,
   Max,
   MaxLength,
   Min,
@@ -54,6 +55,7 @@ export class GenerateObligationsDto {
 }
 
 export class CreateCollectionPaymentDto {
+  @IsOptional() @IsUUID() idempotencyKey?: string;
   @IsString() @IsCuid('memberId') memberId!: string;
   @IsString() @IsCuid('planId') planId!: string;
   @Type(() => Number) @IsNumber() @Min(0.01) amount!: number;

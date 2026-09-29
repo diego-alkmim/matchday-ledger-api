@@ -3,6 +3,7 @@ import {
   CollectionFrequency,
   CollectionPaymentStatus,
   GameStatus,
+  MemberRole,
   ObligationStatus,
   Prisma,
   Role,
@@ -17,6 +18,8 @@ describe('CollectionsLedgerService', () => {
   const paymentUpdate = jest.fn();
   const paymentFindMany = jest.fn();
   const transactionUpdate = jest.fn();
+  const transactionCreate = jest.fn();
+  const paymentCreate = jest.fn();
   const obligationFindUnique = jest.fn();
   const obligationFindUniqueOrThrow = jest.fn();
   const obligationFindMany = jest.fn();
@@ -32,11 +35,15 @@ describe('CollectionsLedgerService', () => {
   const planFindFirst = jest.fn();
   const gameFindUnique = jest.fn();
   const tx = {
-    collectionPayment: { findUnique: paymentFindUnique, findMany: paymentFindMany, update: paymentUpdate },
-    transaction: { update: transactionUpdate },
+    collectionPayment: { findUnique: paymentFindUnique, findMany: paymentFindMany, update: paymentUpdate, create: paymentCreate },
+    transaction: { update: transactionUpdate, create: transactionCreate },
     collectionObligation: { findUnique: obligationFindUnique, findUniqueOrThrow: obligationFindUniqueOrThrow, findMany: obligationFindMany, update: obligationUpdate },
     collectionAdjustment: { create: adjustmentCreate, findUnique: adjustmentFindUnique, update: adjustmentUpdate },
     collectionAllocation: { updateMany: allocationUpdateMany, upsert: allocationUpsert, update: allocationUpdate },
+    member: { findUnique: memberFindUnique },
+    collectionPlan: { findUnique: planFindUnique, findFirst: planFindFirst },
+    game: { findUnique: gameFindUnique },
+    director: { findFirst: jest.fn() },
   };
   const prisma = {
     member: { findUnique: memberFindUnique },
@@ -50,6 +57,7 @@ describe('CollectionsLedgerService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     paymentFindMany.mockResolvedValue([]);
+    paymentFindUnique.mockResolvedValue(null);
   });
 
   it('requires a game for a per-game payment', async () => {
@@ -57,6 +65,7 @@ describe('CollectionsLedgerService', () => {
     planFindUnique.mockResolvedValue({ id: 'plan-1', frequency: CollectionFrequency.PER_GAME });
 
     await expect(service.createPayment({
+      idempotencyKey: '11111111-1111-4111-8111-111111111111',
       memberId: 'member-1', planId: 'plan-1', amount: 70, date: '2026-09-20', paymentMethod: 'PIX',
     }, user)).rejects.toThrow('Selecione o jogo referente ao pagamento.');
   });
@@ -67,9 +76,66 @@ describe('CollectionsLedgerService', () => {
     gameFindUnique.mockResolvedValue({ id: 'game-1', status: GameStatus.FECHADO });
 
     await expect(service.createPayment({
+      idempotencyKey: '22222222-2222-4222-8222-222222222222',
       memberId: 'member-1', planId: 'plan-1', gameId: 'game-1', amount: 70,
       date: '2026-09-20', paymentMethod: 'PIX',
     }, user)).rejects.toThrow('Não é permitido registrar pagamento em jogo fechado.');
+  });
+
+  it('returns an existing payment for the same idempotency key', async () => {
+    const existing = {
+      id: 'payment-1', memberId: 'member-1', planId: 'plan-1', amount: new Prisma.Decimal(70),
+      transaction: {
+        date: new Date('2026-09-20'), gameId: null, paymentMethod: 'PIX', notes: null,
+      },
+      allocations: [],
+    };
+    paymentFindUnique.mockResolvedValue(existing);
+
+    await expect(service.createPayment({
+      idempotencyKey: '33333333-3333-4333-8333-333333333333',
+      memberId: 'member-1', planId: 'plan-1', amount: 70, date: '2026-09-20', paymentMethod: 'PIX',
+    }, user)).resolves.toBe(existing);
+
+    expect(memberFindUnique).not.toHaveBeenCalled();
+  });
+
+  it('rejects reuse of an idempotency key with different payment data', async () => {
+    paymentFindUnique.mockResolvedValue({
+      id: 'payment-1', memberId: 'member-1', planId: 'plan-1', amount: new Prisma.Decimal(70),
+      transaction: { date: new Date('2026-09-20'), gameId: null, paymentMethod: 'PIX', notes: null },
+      allocations: [],
+    });
+
+    await expect(service.createPayment({
+      idempotencyKey: '33333333-3333-4333-8333-333333333333',
+      memberId: 'member-1', planId: 'plan-1', amount: 100, date: '2026-09-20', paymentMethod: 'PIX',
+    }, user)).rejects.toThrow('A chave de idempotência já foi usada em outro pagamento.');
+  });
+
+  it('generates a server idempotency key for an older client request', async () => {
+    const result = { id: 'payment-1', transaction: {}, allocations: [] };
+    paymentFindUnique.mockResolvedValueOnce(null).mockResolvedValueOnce(result);
+    memberFindUnique.mockResolvedValue({
+      id: 'member-1', roles: [{ role: MemberRole.PLAYER, startsAt: new Date('2026-01-01'), endsAt: null }],
+    });
+    planFindUnique.mockResolvedValue({
+      id: 'plan-1', audienceRole: MemberRole.PLAYER, frequency: CollectionFrequency.MONTHLY,
+      exclusiveGroup: 'membership', priority: 50, categoryId: 'category-1',
+      effectiveFrom: new Date('2026-01-01'), inactiveAt: null,
+    });
+    planFindFirst.mockResolvedValue(null);
+    transactionCreate.mockResolvedValue({ id: 'transaction-1' });
+    paymentCreate.mockResolvedValue({ id: 'payment-1' });
+    obligationFindMany.mockResolvedValue([]);
+
+    await expect(service.createPayment({
+      memberId: 'member-1', planId: 'plan-1', amount: 70, date: '2026-09-20', paymentMethod: 'PIX',
+    }, user)).resolves.toBe(result);
+
+    expect(paymentCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({ idempotencyKey: expect.any(String) }),
+    });
   });
 
   it('reverses the payment and transaction while preserving allocation history', async () => {

@@ -57,7 +57,9 @@ export class DirectorsService {
           data: { active: data.active ?? true, inactiveAt: null, contact: data.contact ?? member.contact },
         });
       }
-      if (!member.roles.some((role) => role.role === MemberRole.DIRECTOR && !role.endsAt)) {
+      if (!member.roles.some((role) =>
+        role.role === MemberRole.DIRECTOR && (!role.endsAt || role.endsAt >= activeFrom),
+      )) {
         await tx.memberRoleAssignment.create({
           data: { teamId, memberId: member.id, role: MemberRole.DIRECTOR, startsAt: activeFrom },
         });
@@ -87,10 +89,7 @@ export class DirectorsService {
           },
         });
         if (data.active === false) {
-          await tx.memberRoleAssignment.updateMany({
-            where: { teamId, memberId: director.memberId, role: MemberRole.DIRECTOR, endsAt: null },
-            data: { endsAt: roleDate },
-          });
+          await this.deactivateDirectorRole(tx, teamId, director.memberId, roleDate);
           const remainingRoles = await tx.memberRoleAssignment.count({
             where: { teamId, memberId: director.memberId, endsAt: null },
           });
@@ -106,11 +105,19 @@ export class DirectorsService {
           }
         } else if (data.active === true) {
           const activeRole = await tx.memberRoleAssignment.findFirst({
-            where: { teamId, memberId: director.memberId, role: MemberRole.DIRECTOR, endsAt: null },
+            where: {
+              teamId, memberId: director.memberId, role: MemberRole.DIRECTOR,
+              OR: [{ endsAt: null }, { endsAt: { gte: roleDate } }],
+            },
+            orderBy: { startsAt: 'asc' },
           });
           if (!activeRole) {
             await tx.memberRoleAssignment.create({
               data: { teamId, memberId: director.memberId, role: MemberRole.DIRECTOR, startsAt: roleDate },
+            });
+          } else if (activeRole.startsAt > roleDate) {
+            await tx.memberRoleAssignment.update({
+              where: { id: activeRole.id }, data: { startsAt: roleDate },
             });
           }
         }
@@ -130,7 +137,7 @@ export class DirectorsService {
     const updated = await this.reconciliation.runSerializable(async (tx) => {
       const updated = await tx.director.update({ where: { id_teamId: { id, teamId } }, data: { active: false } });
       if (director.memberId) {
-        await tx.memberRoleAssignment.updateMany({ where: { teamId, memberId: director.memberId, role: MemberRole.DIRECTOR, endsAt: null }, data: { endsAt: inactiveAt } });
+        await this.deactivateDirectorRole(tx, teamId, director.memberId, inactiveAt);
         const remainingRoles = await tx.memberRoleAssignment.count({
           where: { teamId, memberId: director.memberId, endsAt: null },
         });
@@ -157,5 +164,27 @@ export class DirectorsService {
       select: { id: true },
     });
     if (!director) throw new NotFoundException(domainErrors.directorNotFound);
+  }
+
+  private async deactivateDirectorRole(
+    tx: Prisma.TransactionClient,
+    teamId: string,
+    memberId: string,
+    inactiveAt: Date,
+  ) {
+    const currentRole = await tx.memberRoleAssignment.findFirst({
+      where: {
+        teamId, memberId, role: MemberRole.DIRECTOR,
+        startsAt: { lte: inactiveAt },
+        OR: [{ endsAt: null }, { endsAt: { gt: inactiveAt } }],
+      },
+      orderBy: { startsAt: 'desc' },
+    });
+    if (currentRole) {
+      await tx.memberRoleAssignment.update({ where: { id: currentRole.id }, data: { endsAt: inactiveAt } });
+    }
+    await tx.memberRoleAssignment.deleteMany({
+      where: { teamId, memberId, role: MemberRole.DIRECTOR, startsAt: { gt: inactiveAt } },
+    });
   }
 }

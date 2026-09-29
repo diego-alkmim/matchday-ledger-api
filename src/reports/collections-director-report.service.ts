@@ -7,8 +7,6 @@ import {
   ObligationStatus,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { CollectionsGenerationService } from '../collections/collections-generation.service';
-import { CollectionsLedgerService } from '../collections/collections-ledger.service';
 import {
   buildContributionObligations,
   buildDirectorConsolidation,
@@ -16,7 +14,7 @@ import {
   groupPaymentsByDirector,
 } from './director-consolidation';
 import { buildHistoricalDirectorEntries, historicalDirectorSelect } from './historical-directors';
-import { collectionGenerationRange, isInCollectionRange } from './collection-report-range';
+import { isInCollectionRange } from './collection-report-range';
 
 type DirectorReportEntry = ReturnType<typeof buildDirectorConsolidation>;
 type ConsolidatedReport = {
@@ -34,11 +32,7 @@ type ConsolidatedReport = {
 
 @Injectable()
 export class CollectionsDirectorReportService {
-  constructor(
-    private prisma: PrismaService,
-    private generation: CollectionsGenerationService,
-    private ledger: CollectionsLedgerService,
-  ) {}
+  constructor(private prisma: PrismaService) {}
 
   async build(teamId: string, from?: string, to?: string) {
     const dateFilter = {
@@ -55,9 +49,6 @@ export class CollectionsDirectorReportService {
       select: { id: true, frequency: true, exclusiveGroup: true, effectiveFrom: true },
     });
     if (!plans.length) return null;
-    const generationRange = collectionGenerationRange(from, to, plans.map((plan) => plan.effectiveFrom));
-    const generation = await this.generation.generate(teamId, generationRange.from, generationRange.to);
-    if (generation.created > 0) await this.ledger.applyAvailableCredits(teamId);
     const planIds = plans.map((plan) => plan.id);
     const planIdSet = new Set(planIds);
 

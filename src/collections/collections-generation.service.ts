@@ -16,21 +16,39 @@ export class CollectionsGenerationService {
   constructor(private prisma: PrismaService) {}
 
   async generate(teamId: string, fromInput: string, toInput: string) {
+    return this.generateWithClient(this.prisma, teamId, fromInput, toInput);
+  }
+
+  async generateInTransaction(
+    tx: Prisma.TransactionClient,
+    teamId: string,
+    fromInput: string,
+    toInput: string,
+  ) {
+    return this.generateWithClient(tx, teamId, fromInput, toInput);
+  }
+
+  private async generateWithClient(
+    client: Prisma.TransactionClient,
+    teamId: string,
+    fromInput: string,
+    toInput: string,
+  ) {
     const from = this.dateOnly(fromInput);
     const to = this.dateOnly(toInput);
     if (from > to) throw new BadRequestException('O período informado é inválido.');
 
     const [plans, members, games] = await Promise.all([
-      this.prisma.collectionPlan.findMany({
+      client.collectionPlan.findMany({
         where: { teamId, effectiveFrom: { lte: to }, OR: [{ inactiveAt: null }, { inactiveAt: { gte: from } }] },
         include: { rates: { orderBy: { effectiveFrom: 'asc' } } },
         orderBy: { priority: 'desc' },
       }),
-      this.prisma.member.findMany({
+      client.member.findMany({
         where: { teamId, activeFrom: { lte: to } },
         include: { roles: true },
       }),
-      this.prisma.game.findMany({ where: { teamId, date: { gte: from, lte: this.endOfDay(to) } }, orderBy: { date: 'asc' } }),
+      client.game.findMany({ where: { teamId, date: { gte: from, lte: this.endOfDay(to) } }, orderBy: { date: 'asc' } }),
     ]);
 
     const obligations: Prisma.CollectionObligationCreateManyInput[] = [];
@@ -44,7 +62,7 @@ export class CollectionsGenerationService {
       }
     }
     if (!obligations.length) return { created: 0 };
-    const existing = await this.prisma.collectionObligation.findMany({
+    const existing = await client.collectionObligation.findMany({
       where: {
         teamId,
         OR: [
@@ -57,7 +75,7 @@ export class CollectionsGenerationService {
     const existingKeys = new Set(existing.map((item) => this.obligationKey(item)));
     const pending = obligations.filter((item) => !existingKeys.has(this.obligationKey(item)));
     if (!pending.length) return { created: 0 };
-    const result = await this.prisma.collectionObligation.createMany({ data: pending, skipDuplicates: true });
+    const result = await client.collectionObligation.createMany({ data: pending, skipDuplicates: true });
     return { created: result.count };
   }
 

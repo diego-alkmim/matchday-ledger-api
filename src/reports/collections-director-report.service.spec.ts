@@ -6,8 +6,6 @@ import {
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CollectionsDirectorReportService } from './collections-director-report.service';
-import { CollectionsGenerationService } from '../collections/collections-generation.service';
-import { CollectionsLedgerService } from '../collections/collections-ledger.service';
 
 describe('CollectionsDirectorReportService', () => {
   const planFindMany = jest.fn();
@@ -26,13 +24,10 @@ describe('CollectionsDirectorReportService', () => {
     director: { findMany: directorFindMany },
     transaction: { findMany: transactionFindMany },
   } as unknown as PrismaService;
-  const generation = { generate: jest.fn() } as unknown as CollectionsGenerationService;
-  const ledger = { applyAvailableCredits: jest.fn() } as unknown as CollectionsLedgerService;
-  const service = new CollectionsDirectorReportService(prisma, generation, ledger);
+  const service = new CollectionsDirectorReportService(prisma);
 
   beforeEach(() => {
     jest.clearAllMocks();
-    (generation.generate as jest.Mock).mockResolvedValue({ created: 0 });
   });
 
   it('uses monthly collection obligations and payments without requiring a game', async () => {
@@ -69,7 +64,6 @@ describe('CollectionsDirectorReportService', () => {
         OR: expect.any(Array),
       }),
     }));
-    expect(generation.generate).toHaveBeenCalledWith('team-1', '2026-09-01', '2026-09-30');
   });
 
   it('merges legacy history before the first collection plan', async () => {
@@ -118,20 +112,6 @@ describe('CollectionsDirectorReportService', () => {
     });
     expect(result?.games).toHaveLength(2);
     expect(result?.summary.obligationsCount).toBe(2);
-  });
-
-  it('applies available credits only when report generation creates obligations', async () => {
-    planFindMany.mockResolvedValue([{
-      id: 'plan-1', frequency: CollectionFrequency.MONTHLY, exclusiveGroup: 'membership',
-      effectiveFrom: new Date('2026-09-01'),
-    }]);
-    obligationFindMany.mockResolvedValue([]);
-    paymentFindMany.mockResolvedValue([]);
-    (generation.generate as jest.Mock).mockResolvedValue({ created: 1 });
-
-    await service.build('team-1', '2026-09-01', '2026-09-30');
-
-    expect(ledger.applyAvailableCredits).toHaveBeenCalledWith('team-1');
   });
 
   it('counts a payment from another plan when it was allocated to a director obligation', async () => {

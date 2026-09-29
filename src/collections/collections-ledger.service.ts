@@ -1,9 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import {
   AdjustmentType,
-  CollectionFrequency,
   CollectionPaymentStatus,
-  GameStatus,
   ObligationStatus,
   Prisma,
   TransactionType,
@@ -12,65 +11,21 @@ import { AccessTokenPayload } from '../auth/interfaces/access-token-payload.inte
 import { PrismaService } from '../prisma/prisma.service';
 import { AUTOMATIC_CANCELLATION_REASON } from './collections.constants';
 import { payableObligations, runSerializable } from './collections-transaction';
+import { loadPaymentContext } from './collection-payment-context';
 import { AdjustObligationDto, CreateCollectionPaymentDto } from './dto/collections.dto';
 
 @Injectable()
 export class CollectionsLedgerService {
   constructor(private prisma: PrismaService) {}
   async createPayment(dto: CreateCollectionPaymentDto, user: AccessTokenPayload) {
-    const [member, plan, game] = await Promise.all([
-      this.prisma.member.findUnique({
-        where: { id_teamId: { id: dto.memberId, teamId: user.teamId } },
-        include: { roles: true },
-      }),
-      this.prisma.collectionPlan.findUnique({ where: { id_teamId: { id: dto.planId, teamId: user.teamId } } }),
-      dto.gameId
-        ? this.prisma.game.findUnique({ where: { id_teamId: { id: dto.gameId, teamId: user.teamId } } })
-        : Promise.resolve(null),
-    ]);
-    if (!member || !plan) {
-      throw new NotFoundException('Participante ou plano não encontrado.');
-    }
-    if (plan.frequency === CollectionFrequency.PER_GAME && !game) {
-      throw new BadRequestException('Selecione o jogo referente ao pagamento.');
-    }
-    if (plan.frequency === CollectionFrequency.MONTHLY && dto.gameId) {
-      throw new BadRequestException('Pagamentos mensais não devem ser vinculados a um jogo.');
-    }
-    if (game?.status === GameStatus.FECHADO) {
-      throw new BadRequestException('Não é permitido registrar pagamento em jogo fechado.');
-    }
-    const paymentDate = new Date(dto.date);
-    const eligibilityDate = plan.frequency === CollectionFrequency.PER_GAME ? game!.date : paymentDate;
-    const hasRole = member.roles.some((role) =>
-      role.role === plan.audienceRole && role.startsAt <= eligibilityDate && (!role.endsAt || role.endsAt >= eligibilityDate),
-    );
-    if (!hasRole || plan.effectiveFrom > eligibilityDate || (plan.inactiveAt && plan.inactiveAt < eligibilityDate)) {
-      throw new BadRequestException('O plano não está vigente para este participante no período informado.');
-    }
-    const activeRoles = member.roles
-      .filter((role) => role.startsAt <= eligibilityDate && (!role.endsAt || role.endsAt >= eligibilityDate))
-      .map((role) => role.role);
-    const higherPriorityPlan = await this.prisma.collectionPlan.findFirst({
-      where: {
-        teamId: user.teamId,
-        exclusiveGroup: plan.exclusiveGroup,
-        audienceRole: { in: activeRoles },
-        effectiveFrom: { lte: eligibilityDate },
-        OR: [
-          { inactiveAt: null, priority: { gt: plan.priority } },
-          { inactiveAt: { gte: eligibilityDate }, priority: { gt: plan.priority } },
-          { inactiveAt: null, priority: plan.priority, id: { lt: plan.id } },
-          { inactiveAt: { gte: eligibilityDate }, priority: plan.priority, id: { lt: plan.id } },
-        ],
-      },
-      select: { id: true },
-    });
-    if (higherPriorityPlan) {
-      throw new BadRequestException('Outro plano tem prioridade para este participante na data informada.');
-    }
-
-    return runSerializable(this.prisma, async (tx) => {
+    const idempotencyKey = dto.idempotencyKey ?? randomUUID();
+    const operation = async (tx: Prisma.TransactionClient) => {
+      const existing = await tx.collectionPayment.findUnique({
+        where: { teamId_idempotencyKey: { teamId: user.teamId, idempotencyKey } },
+        include: { transaction: true, allocations: { include: { obligation: true } } },
+      });
+      if (existing) return this.assertIdempotentPaymentMatches(existing, dto);
+      const { member, plan } = await loadPaymentContext(tx, dto, user);
       const transaction = await tx.transaction.create({
         data: {
           teamId: user.teamId,
@@ -92,6 +47,7 @@ export class CollectionsLedgerService {
           planId: plan.id,
           transactionId: transaction.id,
           amount: dto.amount,
+          idempotencyKey,
         },
       });
       await this.allocatePayment(
@@ -106,7 +62,18 @@ export class CollectionsLedgerService {
         where: { id: payment.id },
         include: { transaction: true, allocations: { include: { obligation: true } } },
       });
-    }, 'Falha ao registrar o pagamento.');
+    };
+    try {
+      return await runSerializable(this.prisma, operation, 'Falha ao registrar o pagamento.');
+    } catch (error) {
+      if (typeof error !== 'object' || error === null || !('code' in error) || error.code !== 'P2002') throw error;
+      const existing = await this.prisma.collectionPayment.findUnique({
+        where: { teamId_idempotencyKey: { teamId: user.teamId, idempotencyKey } },
+        include: { transaction: true, allocations: { include: { obligation: true } } },
+      });
+      if (!existing) throw error;
+      return this.assertIdempotentPaymentMatches(existing, dto);
+    }
   }
 
   async applyAvailableCredits(teamId: string) {
@@ -345,5 +312,26 @@ export class CollectionsLedgerService {
   private async resolveDirectorId(tx: Prisma.TransactionClient, teamId: string, memberId: string) {
     const director = await tx.director.findFirst({ where: { teamId, memberId }, select: { id: true } });
     return director?.id ?? null;
+  }
+
+  private assertIdempotentPaymentMatches(
+    payment: {
+      memberId: string;
+      planId: string;
+      amount: Prisma.Decimal;
+      transaction: { date: Date; gameId: string | null; paymentMethod: string; notes: string | null };
+    },
+    dto: CreateCollectionPaymentDto,
+  ) {
+    const sameRequest =
+      payment.memberId === dto.memberId &&
+      payment.planId === dto.planId &&
+      payment.amount.equals(dto.amount) &&
+      payment.transaction.date.getTime() === new Date(dto.date).getTime() &&
+      payment.transaction.gameId === (dto.gameId ?? null) &&
+      payment.transaction.paymentMethod === dto.paymentMethod &&
+      payment.transaction.notes === (dto.notes ?? null);
+    if (!sameRequest) throw new ConflictException('A chave de idempotência já foi usada em outro pagamento.');
+    return payment;
   }
 }

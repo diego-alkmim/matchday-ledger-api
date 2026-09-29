@@ -334,6 +334,7 @@ model CollectionPayment {
   transaction      Transaction             @relation(fields: [transactionId, teamId], references: [id, teamId], onDelete: Restrict)
   transactionId    String                  @unique
   amount           Decimal                 @db.Decimal(10, 2)
+  idempotencyKey   String
   status           CollectionPaymentStatus @default(POSTED)
   reversedAt       DateTime?
   reversedByUserId String?
@@ -343,6 +344,7 @@ model CollectionPayment {
 
   @@unique([id, teamId])
   @@unique([transactionId, teamId])
+  @@unique([teamId, idempotencyKey])
   @@index([teamId, memberId, status])
 }
 
