@@ -27,12 +27,19 @@ export class CollectionsMaintenanceService implements OnModuleInit, OnModuleDest
   }
 
   async runNow(now = new Date()) {
-    const to = this.currentMonthEnd(now);
+    const { start: currentMonthStart, end: to } = this.currentMonth(now);
+    const currentMonthStartDate = new Date(`${currentMonthStart}T00:00:00.000Z`);
+    const toDate = new Date(`${to}T00:00:00.000Z`);
     const teams = await this.prisma.team.findMany({
-      where: { active: true },
+      where: {
+        active: true,
+        collectionPlans: { some: { effectiveFrom: { lte: toDate } } },
+      },
       select: {
         id: true,
+        collectionsGeneratedThrough: true,
         collectionPlans: {
+          where: { effectiveFrom: { lte: toDate } },
           orderBy: { effectiveFrom: 'asc' },
           take: 1,
           select: { effectiveFrom: true },
@@ -40,15 +47,17 @@ export class CollectionsMaintenanceService implements OnModuleInit, OnModuleDest
       },
     });
     for (const team of teams) {
-      const earliestPlan = team.collectionPlans[0];
-      if (!earliestPlan) continue;
       try {
-        await this.generation.generate(
-          team.id,
-          earliestPlan.effectiveFrom.toISOString().slice(0, 10),
-          to,
-        );
+        const earliestPlan = team.collectionPlans[0];
+        if (!earliestPlan) continue;
+        const from = !team.collectionsGeneratedThrough
+          ? earliestPlan.effectiveFrom.toISOString().slice(0, 10)
+          : team.collectionsGeneratedThrough < currentMonthStartDate
+            ? this.dayAfter(team.collectionsGeneratedThrough)
+            : currentMonthStart;
+        await this.generation.generate(team.id, from, to);
         await this.ledger.applyAvailableCredits(team.id);
+        await this.updateWatermark(team.id, toDate);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         this.logger.error(`Falha na manutenção automática de arrecadações do time ${team.id}: ${message}`);
@@ -65,12 +74,29 @@ export class CollectionsMaintenanceService implements OnModuleInit, OnModuleDest
     }
   }
 
-  private currentMonthEnd(now: Date) {
+  private currentMonth(now: Date) {
     const current = new Intl.DateTimeFormat('en-CA', {
       timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit',
     }).format(now);
     const [year, month] = current.split('-').map(Number);
     const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
-    return `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+    const prefix = `${year}-${String(month).padStart(2, '0')}`;
+    return {
+      start: `${prefix}-01`,
+      end: `${prefix}-${String(lastDay).padStart(2, '0')}`,
+    };
+  }
+
+  private dayAfter(date: Date) {
+    const next = new Date(date);
+    next.setUTCDate(next.getUTCDate() + 1);
+    return next.toISOString().slice(0, 10);
+  }
+
+  private updateWatermark(teamId: string, through: Date) {
+    return this.prisma.team.update({
+      where: { id: teamId },
+      data: { collectionsGeneratedThrough: through },
+    });
   }
 }

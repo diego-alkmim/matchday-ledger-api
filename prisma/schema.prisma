@@ -89,6 +89,7 @@ model Team {
   active                         Boolean          @default(true)
   contributionMode               ContributionMode @default(PER_GAME)
   monthlyContributionPerDirector Decimal          @default(70) @db.Decimal(10, 2)
+  collectionsGeneratedThrough    DateTime?        @db.Date
   createdAt                      DateTime         @default(now())
   updatedAt                      DateTime         @updatedAt
   memberships                    TeamMembership[]
