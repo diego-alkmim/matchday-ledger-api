@@ -55,9 +55,15 @@ export class CollectionsService {
   async deactivateMember(teamId: string, id: string, inactiveAt: string, actorId: string) {
     const date = new Date(inactiveAt);
     const today = this.today();
-    const member = await this.prisma.member.findUnique({ where: { id_teamId: { id, teamId } } });
-    if (!member) throw new NotFoundException('Participante não encontrado.');
-    return this.prisma.$transaction(async (tx) => {
+    return this.reconciliation.runSerializable(async (tx) => {
+      const member = await tx.member.findUnique({
+        where: { id_teamId: { id, teamId } },
+        include: { roles: { where: { endsAt: null } } },
+      });
+      if (!member) throw new NotFoundException('Participante não encontrado.');
+      if (date < member.activeFrom || member.roles.some((role) => date < role.startsAt)) {
+        throw new BadRequestException('A data de inativação não pode ser anterior ao início do participante ou de suas funções.');
+      }
       const result = await Promise.all([
         tx.member.update({
           where: { id_teamId: { id, teamId } },
@@ -75,18 +81,22 @@ export class CollectionsService {
   }
 
   async addMemberRole(teamId: string, memberId: string, role: MemberRole, startsAt: string, actorId: string) {
-    const result = await this.prisma.$transaction(async (tx) => {
+    const startDate = new Date(startsAt);
+    const result = await this.reconciliation.runSerializable(async (tx) => {
       const member = await tx.member.findUnique({
         where: { id_teamId: { id: memberId, teamId } },
         include: { roles: true, director: true },
       });
       if (!member) throw new NotFoundException('Participante não encontrado.');
-      if (member.roles.some((item) => item.role === role && !item.endsAt)) {
-        throw new BadRequestException('O participante já possui esta função ativa.');
+      if (startDate < member.activeFrom) {
+        throw new BadRequestException('A função não pode iniciar antes da entrada do participante.');
+      }
+      if (member.roles.some((item) => item.role === role && (!item.endsAt || item.endsAt >= startDate))) {
+        throw new BadRequestException('Já existe um período igual ou sobreposto para esta função.');
       }
       await tx.member.update({ where: { id_teamId: { id: memberId, teamId } }, data: { active: true, inactiveAt: null } });
       const assignment = await tx.memberRoleAssignment.create({
-        data: { teamId, memberId, role, startsAt: new Date(startsAt) },
+        data: { teamId, memberId, role, startsAt: startDate },
       });
       if (role === MemberRole.DIRECTOR) {
         if (member.director) {
@@ -104,12 +114,19 @@ export class CollectionsService {
   async endMemberRole(teamId: string, memberId: string, role: MemberRole, endsAt: string, actorId: string) {
     const endDate = new Date(endsAt);
     const today = this.today();
-    const result = await this.prisma.$transaction(async (tx) => {
-      const result = await tx.memberRoleAssignment.updateMany({
+    const result = await this.reconciliation.runSerializable(async (tx) => {
+      const assignment = await tx.memberRoleAssignment.findFirst({
         where: { teamId, memberId, role, endsAt: null },
+        orderBy: { startsAt: 'desc' },
+      });
+      if (!assignment) throw new NotFoundException('Função ativa não encontrada.');
+      if (endDate < assignment.startsAt) {
+        throw new BadRequestException('A função não pode terminar antes de seu início.');
+      }
+      const updated = await tx.memberRoleAssignment.update({
+        where: { id: assignment.id },
         data: { endsAt: endDate },
       });
-      if (result.count === 0) throw new NotFoundException('Função ativa não encontrada.');
       if (role === MemberRole.DIRECTOR) {
         await tx.director.updateMany({
           where: { teamId, memberId },
@@ -118,13 +135,17 @@ export class CollectionsService {
       }
       const activeRoles = await tx.memberRoleAssignment.count({ where: { teamId, memberId, endsAt: null } });
       if (activeRoles === 0) {
+        const latestRole = await tx.memberRoleAssignment.findFirst({
+          where: { teamId, memberId }, orderBy: { endsAt: 'desc' }, select: { endsAt: true },
+        });
+        const inactiveAt = latestRole?.endsAt ?? endDate;
         await tx.member.update({
           where: { id_teamId: { id: memberId, teamId } },
-          data: { active: endDate >= today, inactiveAt: endDate },
+          data: { active: inactiveAt >= today, inactiveAt },
         });
       }
       await this.reconciliation.reconcileInTransaction(tx, teamId, actorId);
-      return result;
+      return updated;
     });
     return result;
   }
@@ -150,7 +171,7 @@ export class CollectionsService {
     if (dto.frequency === 'MONTHLY' && !dto.dueDay) {
       throw new BadRequestException('Informe o dia de vencimento do plano mensal.');
     }
-    return this.prisma.$transaction(async (tx) => {
+    return this.reconciliation.runSerializable(async (tx) => {
       const plan = await tx.collectionPlan.create({
         data: {
           teamId, name: dto.name.trim(), audienceRole: dto.audienceRole, frequency: dto.frequency,
@@ -169,13 +190,21 @@ export class CollectionsService {
   async addRate(teamId: string, planId: string, dto: AddPlanRateDto) {
     const plan = await this.prisma.collectionPlan.findUnique({ where: { id_teamId: { id: planId, teamId } } });
     if (!plan) throw new NotFoundException('Plano não encontrado.');
+    if (new Date(dto.effectiveFrom) < plan.effectiveFrom) {
+      throw new BadRequestException('A vigência da tarifa não pode ser anterior ao início do plano.');
+    }
     return this.prisma.collectionPlanRate.create({ data: { planId, amount: dto.amount, effectiveFrom: new Date(dto.effectiveFrom) } });
   }
 
   async deactivatePlan(teamId: string, planId: string, inactiveAt: string, actorId: string) {
     const date = new Date(inactiveAt);
     const today = this.today();
-    return this.prisma.$transaction(async (tx) => {
+    return this.reconciliation.runSerializable(async (tx) => {
+      const currentPlan = await tx.collectionPlan.findUnique({ where: { id_teamId: { id: planId, teamId } } });
+      if (!currentPlan) throw new NotFoundException('Plano não encontrado.');
+      if (date < currentPlan.effectiveFrom) {
+        throw new BadRequestException('A inativação não pode ser anterior ao início do plano.');
+      }
       const plan = await tx.collectionPlan.update({
         where: { id_teamId: { id: planId, teamId } },
         data: { active: date >= today, inactiveAt: date },

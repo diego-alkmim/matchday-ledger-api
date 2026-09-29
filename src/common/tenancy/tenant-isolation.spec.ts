@@ -21,7 +21,10 @@ describe('Tenant isolation for team-owned records', () => {
     $transaction: transaction,
   } as unknown as PrismaService;
   const categories = new CategoriesService(prisma);
-  const reconciliation = { reconcileInTransaction: jest.fn() } as unknown as CollectionsReconciliationService;
+  const reconciliation = {
+    reconcileInTransaction: jest.fn(),
+    runSerializable: jest.fn((callback: (tx: unknown) => Promise<unknown>) => callback(prisma)),
+  } as unknown as CollectionsReconciliationService;
   const directors = new DirectorsService(prisma, reconciliation);
 
   beforeEach(() => jest.clearAllMocks());

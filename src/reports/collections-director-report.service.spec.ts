@@ -102,7 +102,7 @@ describe('CollectionsDirectorReportService', () => {
     }]);
     directorFindMany.mockResolvedValue([{
       id: 'director-1', memberId: 'director-1', name: 'Diretor', contact: null, active: true,
-      member: { roles: [] },
+      member: { roles: [{ startsAt: new Date('2026-08-10'), endsAt: null }] },
     }]);
     transactionFindMany.mockResolvedValue([{
       id: 'transaction-1', amount: new Prisma.Decimal(70), createdAt: new Date('2026-08-10'),
@@ -117,6 +117,7 @@ describe('CollectionsDirectorReportService', () => {
       obligationsCount: 2, settledObligationsCount: 2, expectedTotal: 140, totalPaid: 140,
     });
     expect(result?.games).toHaveLength(2);
+    expect(result?.summary.obligationsCount).toBe(2);
   });
 
   it('applies available credits only when report generation creates obligations', async () => {

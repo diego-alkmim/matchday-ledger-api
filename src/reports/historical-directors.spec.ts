@@ -20,7 +20,7 @@ describe('buildHistoricalDirectorEntries', () => {
     expect(result[0].obligationStatuses[0].obligation.id).toBe('current-game');
   });
 
-  it('preserves legacy history for migrated directors whose IDs were reused', () => {
+  it('uses the inferred role start for migrated directors whose IDs were reused', () => {
     const directors = [{
       id: 'director-1', memberId: 'director-1', name: 'Diretor legado', contact: null, active: true,
       member: { roles: [{ startsAt: new Date('2026-09-01'), endsAt: null }] },
@@ -28,7 +28,8 @@ describe('buildHistoricalDirectorEntries', () => {
 
     const result = buildHistoricalDirectorEntries(directors, obligations, new Map(), ContributionMode.PER_GAME);
 
-    expect(result[0].totals).toMatchObject({ obligationsCount: 2, expectedTotal: 140 });
+    expect(result[0].totals).toMatchObject({ obligationsCount: 1, expectedTotal: 70 });
+    expect(result[0].obligationStatuses[0].obligation.id).toBe('current-game');
   });
 });
 

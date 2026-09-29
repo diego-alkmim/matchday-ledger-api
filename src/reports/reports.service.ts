@@ -236,7 +236,7 @@ export class ReportsService {
       summary: {
         mode: team.contributionMode,
         gamesCount: games.length,
-        obligationsCount: obligations.length,
+        obligationsCount: directorEntries.reduce((sum, item) => sum + item.totals.obligationsCount, 0),
         monthlyContributionPerDirector:
           team.contributionMode === 'MONTHLY' ? monthlyContributionPerDirector : null,
         expectedTotalPerDirector,

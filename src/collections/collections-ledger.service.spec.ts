@@ -1,4 +1,12 @@
-import { AdjustmentType, CollectionPaymentStatus, ObligationStatus, Prisma, Role } from '@prisma/client';
+import {
+  AdjustmentType,
+  CollectionFrequency,
+  CollectionPaymentStatus,
+  GameStatus,
+  ObligationStatus,
+  Prisma,
+  Role,
+} from '@prisma/client';
 import { AccessTokenPayload } from '../auth/interfaces/access-token-payload.interface';
 import { PrismaService } from '../prisma/prisma.service';
 import { CollectionsLedgerService } from './collections-ledger.service';
@@ -19,6 +27,10 @@ describe('CollectionsLedgerService', () => {
   const allocationUpdateMany = jest.fn();
   const allocationUpsert = jest.fn();
   const allocationUpdate = jest.fn();
+  const memberFindUnique = jest.fn();
+  const planFindUnique = jest.fn();
+  const planFindFirst = jest.fn();
+  const gameFindUnique = jest.fn();
   const tx = {
     collectionPayment: { findUnique: paymentFindUnique, findMany: paymentFindMany, update: paymentUpdate },
     transaction: { update: transactionUpdate },
@@ -26,13 +38,38 @@ describe('CollectionsLedgerService', () => {
     collectionAdjustment: { create: adjustmentCreate, findUnique: adjustmentFindUnique, update: adjustmentUpdate },
     collectionAllocation: { updateMany: allocationUpdateMany, upsert: allocationUpsert, update: allocationUpdate },
   };
-  const prisma = { $transaction: jest.fn((callback) => callback(tx)) } as unknown as PrismaService;
+  const prisma = {
+    member: { findUnique: memberFindUnique },
+    collectionPlan: { findUnique: planFindUnique, findFirst: planFindFirst },
+    game: { findUnique: gameFindUnique },
+    $transaction: jest.fn((callback) => callback(tx)),
+  } as unknown as PrismaService;
   const service = new CollectionsLedgerService(prisma);
   const user = { sub: 'user-1', teamId: 'team-1', role: Role.ADMIN } as AccessTokenPayload;
 
   beforeEach(() => {
     jest.clearAllMocks();
     paymentFindMany.mockResolvedValue([]);
+  });
+
+  it('requires a game for a per-game payment', async () => {
+    memberFindUnique.mockResolvedValue({ id: 'member-1', roles: [] });
+    planFindUnique.mockResolvedValue({ id: 'plan-1', frequency: CollectionFrequency.PER_GAME });
+
+    await expect(service.createPayment({
+      memberId: 'member-1', planId: 'plan-1', amount: 70, date: '2026-09-20', paymentMethod: 'PIX',
+    }, user)).rejects.toThrow('Selecione o jogo referente ao pagamento.');
+  });
+
+  it('rejects a payment linked to a closed game', async () => {
+    memberFindUnique.mockResolvedValue({ id: 'member-1', roles: [] });
+    planFindUnique.mockResolvedValue({ id: 'plan-1', frequency: CollectionFrequency.PER_GAME });
+    gameFindUnique.mockResolvedValue({ id: 'game-1', status: GameStatus.FECHADO });
+
+    await expect(service.createPayment({
+      memberId: 'member-1', planId: 'plan-1', gameId: 'game-1', amount: 70,
+      date: '2026-09-20', paymentMethod: 'PIX',
+    }, user)).rejects.toThrow('Não é permitido registrar pagamento em jogo fechado.');
   });
 
   it('reverses the payment and transaction while preserving allocation history', async () => {
@@ -96,6 +133,32 @@ describe('CollectionsLedgerService', () => {
         memberId: 'member-1',
         plan: { exclusiveGroup: 'membership' },
       }),
+    }));
+  });
+
+  it('does not use per-game excess to settle a future game', async () => {
+    obligationFindMany.mockResolvedValue([
+      { id: 'own', gameId: 'game-1', dueDate: new Date('2026-09-10'), expectedAmount: new Prisma.Decimal(70), allocatedAmount: new Prisma.Decimal(0) },
+      { id: 'future', gameId: 'game-2', dueDate: new Date('2026-09-20'), expectedAmount: new Prisma.Decimal(70), allocatedAmount: new Prisma.Decimal(0) },
+    ]);
+    obligationFindUniqueOrThrow.mockResolvedValue({
+      id: 'own', originalAmount: new Prisma.Decimal(70), adjustments: [], allocations: [],
+    });
+
+    await (service as unknown as {
+      allocatePayment: (
+        transaction: typeof tx,
+        paymentId: string,
+        memberId: string,
+        group: string,
+        amount: number,
+        ownGameId: string,
+      ) => Promise<void>;
+    }).allocatePayment(tx, 'payment-1', 'member-1', 'membership', 140, 'game-1');
+
+    expect(allocationUpsert).toHaveBeenCalledTimes(1);
+    expect(allocationUpsert).toHaveBeenCalledWith(expect.objectContaining({
+      create: expect.objectContaining({ obligationId: 'own' }),
     }));
   });
 

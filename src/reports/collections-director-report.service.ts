@@ -170,7 +170,7 @@ export class CollectionsDirectorReportService {
       summary: {
         mode,
         gamesCount: games.length,
-        obligationsCount: uniqueObligations.length,
+        obligationsCount: directors.reduce((sum, item) => sum + item.totals.obligationsCount, 0),
         monthlyContributionPerDirector: null,
         expectedTotalPerDirector: directors.length ? this.money(expectedTotal / directors.length) : 0,
       },
@@ -237,7 +237,7 @@ export class CollectionsDirectorReportService {
       summary: {
         mode: team.contributionMode,
         gamesCount: games.length,
-        obligationsCount: obligations.length,
+        obligationsCount: directorEntries.reduce((sum, item) => sum + item.totals.obligationsCount, 0),
         monthlyContributionPerDirector: team.contributionMode === ContributionMode.MONTHLY ? monthlyAmount : null,
         expectedTotalPerDirector: directorEntries.length
           ? this.money(directorEntries.reduce((sum, item) => sum + item.totals.expectedTotal, 0) / directorEntries.length)
@@ -306,7 +306,7 @@ export class CollectionsDirectorReportService {
       summary: {
         mode: legacy.summary.mode === current.summary.mode ? legacy.summary.mode : 'MIXED',
         gamesCount: games.length,
-        obligationsCount: obligations.length,
+        obligationsCount: mergedDirectors.reduce((sum, item) => sum + item.totals.obligationsCount, 0),
         monthlyContributionPerDirector:
           legacy.summary.mode === current.summary.mode ? current.summary.monthlyContributionPerDirector : null,
         expectedTotalPerDirector: mergedDirectors.length

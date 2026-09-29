@@ -1,7 +1,9 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import {
   AdjustmentType,
+  CollectionFrequency,
   CollectionPaymentStatus,
+  GameStatus,
   ObligationStatus,
   Prisma,
   TransactionType,
@@ -9,44 +11,57 @@ import {
 import { AccessTokenPayload } from '../auth/interfaces/access-token-payload.interface';
 import { PrismaService } from '../prisma/prisma.service';
 import { AUTOMATIC_CANCELLATION_REASON } from './collections.constants';
+import { payableObligations, runSerializable } from './collections-transaction';
 import { AdjustObligationDto, CreateCollectionPaymentDto } from './dto/collections.dto';
 
 @Injectable()
 export class CollectionsLedgerService {
   constructor(private prisma: PrismaService) {}
-
   async createPayment(dto: CreateCollectionPaymentDto, user: AccessTokenPayload) {
-    const [member, plan] = await Promise.all([
+    const [member, plan, game] = await Promise.all([
       this.prisma.member.findUnique({
         where: { id_teamId: { id: dto.memberId, teamId: user.teamId } },
         include: { roles: true },
       }),
       this.prisma.collectionPlan.findUnique({ where: { id_teamId: { id: dto.planId, teamId: user.teamId } } }),
+      dto.gameId
+        ? this.prisma.game.findUnique({ where: { id_teamId: { id: dto.gameId, teamId: user.teamId } } })
+        : Promise.resolve(null),
     ]);
     if (!member || !plan) {
       throw new NotFoundException('Participante ou plano não encontrado.');
     }
+    if (plan.frequency === CollectionFrequency.PER_GAME && !game) {
+      throw new BadRequestException('Selecione o jogo referente ao pagamento.');
+    }
+    if (plan.frequency === CollectionFrequency.MONTHLY && dto.gameId) {
+      throw new BadRequestException('Pagamentos mensais não devem ser vinculados a um jogo.');
+    }
+    if (game?.status === GameStatus.FECHADO) {
+      throw new BadRequestException('Não é permitido registrar pagamento em jogo fechado.');
+    }
     const paymentDate = new Date(dto.date);
+    const eligibilityDate = plan.frequency === CollectionFrequency.PER_GAME ? game!.date : paymentDate;
     const hasRole = member.roles.some((role) =>
-      role.role === plan.audienceRole && role.startsAt <= paymentDate && (!role.endsAt || role.endsAt >= paymentDate),
+      role.role === plan.audienceRole && role.startsAt <= eligibilityDate && (!role.endsAt || role.endsAt >= eligibilityDate),
     );
-    if (!hasRole || plan.effectiveFrom > paymentDate || (plan.inactiveAt && plan.inactiveAt < paymentDate)) {
-      throw new BadRequestException('O plano não está vigente para este participante na data do pagamento.');
+    if (!hasRole || plan.effectiveFrom > eligibilityDate || (plan.inactiveAt && plan.inactiveAt < eligibilityDate)) {
+      throw new BadRequestException('O plano não está vigente para este participante no período informado.');
     }
     const activeRoles = member.roles
-      .filter((role) => role.startsAt <= paymentDate && (!role.endsAt || role.endsAt >= paymentDate))
+      .filter((role) => role.startsAt <= eligibilityDate && (!role.endsAt || role.endsAt >= eligibilityDate))
       .map((role) => role.role);
     const higherPriorityPlan = await this.prisma.collectionPlan.findFirst({
       where: {
         teamId: user.teamId,
         exclusiveGroup: plan.exclusiveGroup,
         audienceRole: { in: activeRoles },
-        effectiveFrom: { lte: paymentDate },
+        effectiveFrom: { lte: eligibilityDate },
         OR: [
           { inactiveAt: null, priority: { gt: plan.priority } },
-          { inactiveAt: { gte: paymentDate }, priority: { gt: plan.priority } },
+          { inactiveAt: { gte: eligibilityDate }, priority: { gt: plan.priority } },
           { inactiveAt: null, priority: plan.priority, id: { lt: plan.id } },
-          { inactiveAt: { gte: paymentDate }, priority: plan.priority, id: { lt: plan.id } },
+          { inactiveAt: { gte: eligibilityDate }, priority: plan.priority, id: { lt: plan.id } },
         ],
       },
       select: { id: true },
@@ -55,7 +70,7 @@ export class CollectionsLedgerService {
       throw new BadRequestException('Outro plano tem prioridade para este participante na data informada.');
     }
 
-    return this.runSerializable(async (tx) => {
+    return runSerializable(this.prisma, async (tx) => {
       const transaction = await tx.transaction.create({
         data: {
           teamId: user.teamId,
@@ -91,11 +106,11 @@ export class CollectionsLedgerService {
         where: { id: payment.id },
         include: { transaction: true, allocations: { include: { obligation: true } } },
       });
-    });
+    }, 'Falha ao registrar o pagamento.');
   }
 
   async applyAvailableCredits(teamId: string) {
-    return this.runSerializable((tx) => this.applyAvailableCreditsInTransaction(tx, teamId));
+    return runSerializable(this.prisma, (tx) => this.applyAvailableCreditsInTransaction(tx, teamId), 'Falha ao aplicar os créditos disponíveis.');
   }
 
   async applyAvailableCreditsInTransaction(tx: Prisma.TransactionClient, teamId: string) {
@@ -124,8 +139,22 @@ export class CollectionsLedgerService {
     }
   }
 
+  async restoreAutomaticallyCancelledObligationInTransaction(
+    tx: Prisma.TransactionClient,
+    obligationId: string,
+    adjustmentId: string,
+    actorId: string,
+    reason: string,
+  ) {
+    await tx.collectionAdjustment.update({
+      where: { id: adjustmentId },
+      data: { reversedAt: new Date(), reversedByUserId: actorId, reversalReason: reason },
+    });
+    return this.recalculateObligation(tx, obligationId);
+  }
+
   async reversePayment(id: string, reason: string, user: AccessTokenPayload) {
-    return this.runSerializable(async (tx) => {
+    return runSerializable(this.prisma, async (tx) => {
       const payment = await tx.collectionPayment.findUnique({
         where: { id_teamId: { id, teamId: user.teamId } },
         include: { allocations: true },
@@ -147,14 +176,14 @@ export class CollectionsLedgerService {
         await this.recalculateObligation(tx, obligationId);
       }
       return { reversed: true };
-    });
+    }, 'Falha ao estornar o pagamento.');
   }
 
   async adjustObligation(id: string, dto: AdjustObligationDto, user: AccessTokenPayload) {
     if ((dto.type === AdjustmentType.DISCOUNT || dto.type === AdjustmentType.SURCHARGE) && !dto.amount) {
       throw new BadRequestException('Informe o valor do ajuste.');
     }
-    const result = await this.runSerializable(async (tx) => {
+    const result = await runSerializable(this.prisma, async (tx) => {
       const obligation = await tx.collectionObligation.findUnique({
         where: { id },
         select: { id: true, teamId: true, status: true, _count: { select: { allocations: { where: { releasedAt: null } } } } },
@@ -178,12 +207,12 @@ export class CollectionsLedgerService {
       const result = await this.recalculateObligation(tx, id);
       await this.applyAvailableCreditsInTransaction(tx, user.teamId);
       return result;
-    });
+    }, 'Falha ao ajustar a obrigação.');
     return result;
   }
 
   async reverseAdjustment(id: string, reason: string, user: AccessTokenPayload) {
-    const result = await this.runSerializable(async (tx) => {
+    const result = await runSerializable(this.prisma, async (tx) => {
       const adjustment = await tx.collectionAdjustment.findUnique({
         where: { id },
         include: { obligation: { select: { id: true, teamId: true } } },
@@ -206,7 +235,7 @@ export class CollectionsLedgerService {
       const result = await this.recalculateObligation(tx, adjustment.obligation.id);
       await this.applyAvailableCreditsInTransaction(tx, user.teamId);
       return result;
-    });
+    }, 'Falha ao estornar o ajuste.');
     return result;
   }
 
@@ -218,7 +247,7 @@ export class CollectionsLedgerService {
     amount: number,
     ownGameId?: string,
   ) {
-    const obligations = await tx.collectionObligation.findMany({
+    const availableObligations = await tx.collectionObligation.findMany({
       where: {
         memberId,
         plan: { exclusiveGroup },
@@ -226,7 +255,7 @@ export class CollectionsLedgerService {
       },
       orderBy: [{ dueDate: 'asc' }, { createdAt: 'asc' }],
     });
-    obligations.sort((a, b) => (a.gameId === ownGameId ? -1 : b.gameId === ownGameId ? 1 : a.dueDate.getTime() - b.dueDate.getTime()));
+    const obligations = payableObligations(availableObligations, ownGameId);
     let remaining = new Prisma.Decimal(amount);
     for (const obligation of obligations) {
       const missing = obligation.expectedAmount.minus(obligation.allocatedAmount);
@@ -313,21 +342,6 @@ export class CollectionsLedgerService {
       }
     }
   }
-
-  private async runSerializable<T>(operation: (tx: Prisma.TransactionClient) => Promise<T>) {
-    for (let attempt = 1; attempt <= 3; attempt += 1) {
-      try {
-        return await this.prisma.$transaction(operation, {
-          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
-        });
-      } catch (error) {
-        const retryable = typeof error === 'object' && error !== null && 'code' in error && error.code === 'P2034';
-        if (!retryable || attempt === 3) throw error;
-      }
-    }
-    throw new Error('Falha ao concluir a operação financeira.');
-  }
-
   private async resolveDirectorId(tx: Prisma.TransactionClient, teamId: string, memberId: string) {
     const director = await tx.director.findFirst({ where: { teamId, memberId }, select: { id: true } });
     return director?.id ?? null;

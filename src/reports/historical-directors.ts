@@ -47,8 +47,7 @@ function obligationsForDirector(
   obligations: ContributionObligation[],
   hasPayments: boolean,
 ) {
-  // Migrated legacy directors reuse the same ID and do not have reliable historical role dates.
-  if (!director.member || director.memberId === director.id) {
+  if (!director.member) {
     return director.active || hasPayments ? obligations : [];
   }
   return obligations.filter((obligation) => director.member!.roles.some((role) =>

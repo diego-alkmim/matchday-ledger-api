@@ -41,7 +41,7 @@ export class DirectorsService {
   }
 
   async create(data: CreateDirectorDto, teamId: string, actorId: string) {
-    const director = await this.prisma.$transaction(async (tx) => {
+    const director = await this.reconciliation.runSerializable(async (tx) => {
       const activeFrom = new Date();
       const existingMember = await tx.member.findUnique({
         where: { teamId_name: { teamId, name: data.name } },
@@ -71,7 +71,7 @@ export class DirectorsService {
 
   async update(id: string, data: UpdateDirectorDto, teamId: string, actorId: string) {
     await this.assertExists(id, teamId);
-    const director = await this.prisma.$transaction(async (tx) => {
+    const director = await this.reconciliation.runSerializable(async (tx) => {
       const director = await tx.director.update({
         where: { id_teamId: { id, teamId } },
         data: data as Prisma.DirectorUpdateInput,
@@ -95,9 +95,13 @@ export class DirectorsService {
             where: { teamId, memberId: director.memberId, endsAt: null },
           });
           if (remainingRoles === 0) {
+            const latestRole = await tx.memberRoleAssignment.findFirst({
+              where: { teamId, memberId: director.memberId }, orderBy: { endsAt: 'desc' }, select: { endsAt: true },
+            });
+            const inactiveAt = latestRole?.endsAt ?? roleDate;
             await tx.member.update({
               where: { id_teamId: { id: director.memberId, teamId } },
-              data: { active: false, inactiveAt: roleDate },
+              data: { active: inactiveAt >= roleDate, inactiveAt },
             });
           }
         } else if (data.active === true) {
@@ -123,7 +127,7 @@ export class DirectorsService {
     const director = await this.prisma.director.findUnique({ where: { id_teamId: { id, teamId } } });
     if (!director) throw new NotFoundException(domainErrors.directorNotFound);
     const inactiveAt = new Date();
-    const updated = await this.prisma.$transaction(async (tx) => {
+    const updated = await this.reconciliation.runSerializable(async (tx) => {
       const updated = await tx.director.update({ where: { id_teamId: { id, teamId } }, data: { active: false } });
       if (director.memberId) {
         await tx.memberRoleAssignment.updateMany({ where: { teamId, memberId: director.memberId, role: MemberRole.DIRECTOR, endsAt: null }, data: { endsAt: inactiveAt } });
@@ -131,7 +135,14 @@ export class DirectorsService {
           where: { teamId, memberId: director.memberId, endsAt: null },
         });
         if (remainingRoles === 0) {
-          await tx.member.update({ where: { id_teamId: { id: director.memberId, teamId } }, data: { active: false, inactiveAt } });
+          const latestRole = await tx.memberRoleAssignment.findFirst({
+            where: { teamId, memberId: director.memberId }, orderBy: { endsAt: 'desc' }, select: { endsAt: true },
+          });
+          const memberInactiveAt = latestRole?.endsAt ?? inactiveAt;
+          await tx.member.update({
+            where: { id_teamId: { id: director.memberId, teamId } },
+            data: { active: memberInactiveAt >= inactiveAt, inactiveAt: memberInactiveAt },
+          });
         }
       }
       await this.reconciliation.reconcileInTransaction(tx, teamId, actorId);

@@ -13,7 +13,9 @@ import { CollectionsLedgerService } from './collections-ledger.service';
 import {
   AUTOMATIC_CANCELLATION_REASON,
   AUTOMATIC_CANCELLATION_RELEASE_REASON,
+  AUTOMATIC_RESTORATION_REASON,
 } from './collections.constants';
+import { runSerializable } from './collections-transaction';
 
 @Injectable()
 export class CollectionsReconciliationService {
@@ -23,7 +25,11 @@ export class CollectionsReconciliationService {
   ) {}
 
   async reconcile(teamId: string, actorId: string) {
-    return this.prisma.$transaction((tx) => this.reconcileInTransaction(tx, teamId, actorId));
+    return this.runSerializable((tx) => this.reconcileInTransaction(tx, teamId, actorId));
+  }
+
+  async runSerializable<T>(operation: (tx: Prisma.TransactionClient) => Promise<T>) {
+    return runSerializable(this.prisma, operation, 'Falha ao reconciliar as obrigações financeiras.');
   }
 
   async reconcileInTransaction(tx: Prisma.TransactionClient, teamId: string, actorId: string) {
@@ -32,15 +38,29 @@ export class CollectionsReconciliationService {
       tx.collectionObligation.findMany({
         where: {
           teamId,
-          status: { in: [ObligationStatus.OPEN, ObligationStatus.PARTIAL, ObligationStatus.PAID] },
+          status: { in: [ObligationStatus.OPEN, ObligationStatus.PARTIAL, ObligationStatus.PAID, ObligationStatus.CANCELLED] },
         },
-        include: { plan: true, member: { include: { roles: true } } },
+        include: {
+          plan: true,
+          member: { include: { roles: true } },
+          adjustments: { where: { reversedAt: null }, orderBy: { createdAt: 'desc' } },
+        },
       }),
     ]);
 
-    const ineligible = obligations.filter((obligation) => {
+    const evaluated = obligations.map((obligation) => {
       const referenceDate = this.referenceDate(obligation.plan, obligation.competence, obligation.dueDate);
-      return !this.planWinsAt(obligation.plan, plans, obligation.member.roles, referenceDate);
+      return { obligation, eligible: this.planWinsAt(obligation.plan, plans, obligation.member.roles, referenceDate) };
+    });
+    const ineligible = evaluated
+      .filter(({ obligation, eligible }) => !eligible && obligation.status !== ObligationStatus.CANCELLED)
+      .map(({ obligation }) => obligation);
+    const restorable = evaluated.flatMap(({ obligation, eligible }) => {
+      if (!eligible || obligation.status !== ObligationStatus.CANCELLED) return [];
+      const adjustment = obligation.adjustments.find((item) =>
+        item.type === AdjustmentType.CANCELLATION && item.reason === AUTOMATIC_CANCELLATION_REASON,
+      );
+      return adjustment ? [{ obligation, adjustment }] : [];
     });
 
     if (ineligible.length) {
@@ -66,8 +86,18 @@ export class CollectionsReconciliationService {
       }
     }
 
+    for (const { obligation, adjustment } of restorable) {
+      await this.ledger.restoreAutomaticallyCancelledObligationInTransaction(
+        tx,
+        obligation.id,
+        adjustment.id,
+        actorId,
+        AUTOMATIC_RESTORATION_REASON,
+      );
+    }
+
     await this.ledger.applyAvailableCreditsInTransaction(tx, teamId);
-    return { cancelled: ineligible.length };
+    return { cancelled: ineligible.length, restored: restorable.length };
   }
 
   private referenceDate(plan: CollectionPlan, competence: Date | null, dueDate: Date) {
