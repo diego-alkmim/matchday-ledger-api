@@ -87,10 +87,10 @@ export class ReportsService {
         ? {
             createdAt: {
               ...(query.from
-                ? { gte: new Date(`${query.from}T00:00:00.000Z`) }
+                ? { gte: new Date(`${query.from}T00:00:00.000-03:00`) }
                 : {}),
               ...(query.to
-                ? { lte: new Date(`${query.to}T23:59:59.999Z`) }
+                ? { lte: new Date(`${query.to}T23:59:59.999-03:00`) }
                 : {}),
             },
           }

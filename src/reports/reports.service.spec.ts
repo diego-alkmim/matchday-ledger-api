@@ -79,6 +79,19 @@ describe('ReportsService', () => {
     expect(count).not.toHaveBeenCalled();
   });
 
+  it('uses the team timezone for analytical game date boundaries', async () => {
+    findMany.mockResolvedValueOnce([]);
+
+    await service.analyticalByGame({ from: '2026-09-01', to: '2026-09-30' }, 'team-1');
+
+    const args = findMany.mock.calls[0]?.[0] as unknown as {
+      where: { transactions: { some: { createdAt: { gte: Date; lte: Date } } } };
+    };
+    const createdAt = args.where.transactions.some.createdAt;
+    expect(createdAt.gte.toISOString()).toBe('2026-09-01T03:00:00.000Z');
+    expect(createdAt.lte.toISOString()).toBe('2026-10-01T02:59:59.999Z');
+  });
+
   it('scopes every summary report to the active team', async () => {
     groupBy.mockResolvedValue([]);
     queryRaw.mockResolvedValue([]);

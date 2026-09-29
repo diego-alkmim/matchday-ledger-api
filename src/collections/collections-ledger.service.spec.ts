@@ -181,7 +181,7 @@ describe('CollectionsLedgerService', () => {
 
   it('reverses the payment and transaction while preserving allocation history', async () => {
     paymentFindUnique.mockResolvedValue({
-      id: 'payment-1', teamId: 'team-1', transactionId: 'transaction-1',
+      id: 'payment-1', teamId: 'team-1', memberId: 'member-1', transactionId: 'transaction-1',
       status: CollectionPaymentStatus.POSTED,
       allocations: [{ obligationId: 'obligation-1', amount: new Prisma.Decimal(70) }],
     });
@@ -204,6 +204,7 @@ describe('CollectionsLedgerService', () => {
     expect(paymentFindMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({
         teamId: 'team-1',
+        memberId: 'member-1',
         status: CollectionPaymentStatus.POSTED,
         availableAmount: { gt: 0 },
       }),

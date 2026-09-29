@@ -79,15 +79,15 @@ export class CollectionsLedgerService {
       return this.assertIdempotentPaymentMatches(existing, dto);
     }
   }
-
   async applyAvailableCredits(teamId: string) {
     return runSerializable(this.prisma, (tx) => this.applyAvailableCreditsInTransaction(tx, teamId), 'Falha ao aplicar os créditos disponíveis.');
   }
 
-  async applyAvailableCreditsInTransaction(tx: Prisma.TransactionClient, teamId: string) {
+  async applyAvailableCreditsInTransaction(tx: Prisma.TransactionClient, teamId: string, memberId?: string) {
     const payments = await tx.collectionPayment.findMany({
       where: {
         teamId,
+        ...(memberId ? { memberId } : {}),
         status: CollectionPaymentStatus.POSTED,
         availableAmount: { gt: 0 },
       },
@@ -157,7 +157,7 @@ export class CollectionsLedgerService {
       for (const obligationId of new Set(payment.allocations.map((item) => item.obligationId))) {
         await this.recalculateObligation(tx, obligationId);
       }
-      await this.applyAvailableCreditsInTransaction(tx, user.teamId);
+      await this.applyAvailableCreditsInTransaction(tx, user.teamId, payment.memberId);
       return { reversed: true };
     }, 'Falha ao estornar o pagamento.');
   }
@@ -169,7 +169,7 @@ export class CollectionsLedgerService {
     const result = await runSerializable(this.prisma, async (tx) => {
       const obligation = await tx.collectionObligation.findUnique({
         where: { id },
-        select: { id: true, teamId: true, status: true, _count: { select: { allocations: { where: { releasedAt: null } } } } },
+        select: { id: true, teamId: true, memberId: true, status: true, _count: { select: { allocations: { where: { releasedAt: null } } } } },
       });
       if (!obligation || obligation.teamId !== user.teamId) throw new NotFoundException('Obrigação não encontrada.');
       if (obligation.status === ObligationStatus.CANCELLED || obligation.status === ObligationStatus.WAIVED) {
@@ -185,7 +185,7 @@ export class CollectionsLedgerService {
         await this.releaseActiveAllocationsForObligationInTransaction(tx, id, dto.reason);
       }
       const result = await this.recalculateObligation(tx, id);
-      await this.applyAvailableCreditsInTransaction(tx, user.teamId);
+      await this.applyAvailableCreditsInTransaction(tx, user.teamId, obligation.memberId);
       return result;
     }, 'Falha ao ajustar a obrigação.');
     return result;
@@ -195,7 +195,7 @@ export class CollectionsLedgerService {
     const result = await runSerializable(this.prisma, async (tx) => {
       const adjustment = await tx.collectionAdjustment.findUnique({
         where: { id },
-        include: { obligation: { select: { id: true, teamId: true } } },
+        include: { obligation: { select: { id: true, teamId: true, memberId: true } } },
       });
       if (!adjustment || adjustment.obligation.teamId !== user.teamId) {
         throw new NotFoundException('Ajuste não encontrado.');
@@ -213,7 +213,7 @@ export class CollectionsLedgerService {
         },
       });
       const result = await this.recalculateObligation(tx, adjustment.obligation.id);
-      await this.applyAvailableCreditsInTransaction(tx, user.teamId);
+      await this.applyAvailableCreditsInTransaction(tx, user.teamId, adjustment.obligation.memberId);
       return result;
     }, 'Falha ao estornar o ajuste.');
     return result;

@@ -74,6 +74,8 @@ describe('GamesService tenant isolation', () => {
       status: GameStatus.ABERTO,
       from: '2026-01-01',
       to: '2026-12-31',
+      activityFrom: '2026-09-01',
+      activityTo: '2026-09-30',
       compact: true,
     });
 
@@ -82,8 +84,18 @@ describe('GamesService tenant isolation', () => {
         teamId: 'team-1',
         status: GameStatus.ABERTO,
         date: {
-          gte: new Date('2026-01-01T00:00:00.000Z'),
-          lte: new Date('2026-12-31T23:59:59.999Z'),
+          gte: new Date('2026-01-01T03:00:00.000Z'),
+          lte: new Date('2027-01-01T02:59:59.999Z'),
+        },
+        transactions: {
+          some: {
+            teamId: 'team-1',
+            reversedAt: null,
+            createdAt: {
+              gte: new Date('2026-09-01T03:00:00.000Z'),
+              lte: new Date('2026-10-01T02:59:59.999Z'),
+            },
+          },
         },
       },
       select: { id: true, date: true, opponent: true, location: true, status: true },

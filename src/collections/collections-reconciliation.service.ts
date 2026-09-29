@@ -102,7 +102,8 @@ export class CollectionsReconciliationService {
       );
     }
 
-    await this.ledger.applyAvailableCreditsInTransaction(tx, teamId);
+    if (memberId) await this.ledger.applyAvailableCreditsInTransaction(tx, teamId, memberId);
+    else await this.ledger.applyAvailableCreditsInTransaction(tx, teamId);
     return { cancelled: ineligible.length, restored: restorable.length };
   }
 

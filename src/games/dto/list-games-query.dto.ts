@@ -23,6 +23,18 @@ export class ListGamesQueryDto {
   @Matches(DATE_ONLY_REGEX)
   to?: string;
 
+  @ApiPropertyOptional({ example: '2026-01-01' })
+  @IsOptional()
+  @IsDateString()
+  @Matches(DATE_ONLY_REGEX)
+  activityFrom?: string;
+
+  @ApiPropertyOptional({ example: '2026-12-31' })
+  @IsOptional()
+  @IsDateString()
+  @Matches(DATE_ONLY_REGEX)
+  activityTo?: string;
+
   @ApiPropertyOptional({ default: false })
   @IsOptional()
   @Transform(({ value }) => value === true || value === 'true')

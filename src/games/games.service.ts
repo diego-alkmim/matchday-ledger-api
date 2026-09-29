@@ -20,14 +20,21 @@ export class GamesService {
 
   async list(teamId: string, query: ListGamesQueryDto = new ListGamesQueryDto()) {
     const date = {
-      ...(query.from ? { gte: new Date(`${query.from}T00:00:00.000Z`) } : {}),
-      ...(query.to ? { lte: new Date(`${query.to}T23:59:59.999Z`) } : {}),
+      ...(query.from ? { gte: new Date(`${query.from}T00:00:00.000-03:00`) } : {}),
+      ...(query.to ? { lte: new Date(`${query.to}T23:59:59.999-03:00`) } : {}),
+    };
+    const activityDate = {
+      ...(query.activityFrom ? { gte: new Date(`${query.activityFrom}T00:00:00.000-03:00`) } : {}),
+      ...(query.activityTo ? { lte: new Date(`${query.activityTo}T23:59:59.999-03:00`) } : {}),
     };
     const games = await this.prisma.game.findMany({
       where: {
         teamId,
         ...(query.status ? { status: query.status } : {}),
         ...(query.from || query.to ? { date } : {}),
+        ...(query.activityFrom || query.activityTo ? {
+          transactions: { some: { teamId, reversedAt: null, createdAt: activityDate } },
+        } : {}),
       },
       ...(query.compact ? {
         select: { id: true, date: true, opponent: true, location: true, status: true },
