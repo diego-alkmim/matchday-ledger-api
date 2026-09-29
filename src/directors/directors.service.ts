@@ -4,10 +4,14 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateDirectorDto } from './dto/create-director.dto';
 import { UpdateDirectorDto } from './dto/update-director.dto';
 import { domainErrors } from '../common/errors/domain-errors';
+import { CollectionsReconciliationService } from '../collections/collections-reconciliation.service';
 
 @Injectable()
 export class DirectorsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private reconciliation: CollectionsReconciliationService,
+  ) {}
 
   list(teamId: string) {
     const currentDate = new Intl.DateTimeFormat('en-CA', {
@@ -36,8 +40,8 @@ export class DirectorsService {
     });
   }
 
-  create(data: CreateDirectorDto, teamId: string) {
-    return this.prisma.$transaction(async (tx) => {
+  async create(data: CreateDirectorDto, teamId: string, actorId: string) {
+    const director = await this.prisma.$transaction(async (tx) => {
       const activeFrom = new Date();
       const existingMember = await tx.member.findUnique({
         where: { teamId_name: { teamId, name: data.name } },
@@ -60,11 +64,13 @@ export class DirectorsService {
       }
       return tx.director.create({ data: { ...data, teamId, memberId: member.id } });
     });
+    await this.reconciliation.reconcile(teamId, actorId);
+    return director;
   }
 
-  async update(id: string, data: UpdateDirectorDto, teamId: string) {
+  async update(id: string, data: UpdateDirectorDto, teamId: string, actorId: string) {
     await this.assertExists(id, teamId);
-    return this.prisma.$transaction(async (tx) => {
+    const director = await this.prisma.$transaction(async (tx) => {
       const director = await tx.director.update({
         where: { id_teamId: { id, teamId } },
         data: data as Prisma.DirectorUpdateInput,
@@ -106,13 +112,15 @@ export class DirectorsService {
       }
       return director;
     });
+    if (data.active !== undefined) await this.reconciliation.reconcile(teamId, actorId);
+    return director;
   }
 
-  async remove(id: string, teamId: string) {
+  async remove(id: string, teamId: string, actorId: string) {
     const director = await this.prisma.director.findUnique({ where: { id_teamId: { id, teamId } } });
     if (!director) throw new NotFoundException(domainErrors.directorNotFound);
     const inactiveAt = new Date();
-    return this.prisma.$transaction(async (tx) => {
+    const updated = await this.prisma.$transaction(async (tx) => {
       const updated = await tx.director.update({ where: { id_teamId: { id, teamId } }, data: { active: false } });
       if (director.memberId) {
         await tx.memberRoleAssignment.updateMany({ where: { teamId, memberId: director.memberId, role: MemberRole.DIRECTOR, endsAt: null }, data: { endsAt: inactiveAt } });
@@ -125,6 +133,8 @@ export class DirectorsService {
       }
       return updated;
     });
+    await this.reconciliation.reconcile(teamId, actorId);
+    return updated;
   }
 
   private async assertExists(id: string, teamId: string) {

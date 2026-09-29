@@ -8,5 +8,6 @@ import { CollectionsService } from './collections.service';
 @Module({
   controllers: [CollectionsController],
   providers: [CollectionsService, CollectionsGenerationService, CollectionsLedgerService, CollectionsReconciliationService],
+  exports: [CollectionsReconciliationService],
 })
 export class CollectionsModule {}

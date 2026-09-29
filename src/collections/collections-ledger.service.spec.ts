@@ -17,12 +17,13 @@ describe('CollectionsLedgerService', () => {
   const adjustmentUpdate = jest.fn();
   const allocationUpdateMany = jest.fn();
   const allocationUpsert = jest.fn();
+  const allocationUpdate = jest.fn();
   const tx = {
     collectionPayment: { findUnique: paymentFindUnique, findMany: paymentFindMany, update: paymentUpdate },
     transaction: { update: transactionUpdate },
     collectionObligation: { findUnique: obligationFindUnique, findUniqueOrThrow: obligationFindUniqueOrThrow, findMany: obligationFindMany, update: obligationUpdate },
     collectionAdjustment: { create: adjustmentCreate, findUnique: adjustmentFindUnique, update: adjustmentUpdate },
-    collectionAllocation: { updateMany: allocationUpdateMany, upsert: allocationUpsert },
+    collectionAllocation: { updateMany: allocationUpdateMany, upsert: allocationUpsert, update: allocationUpdate },
   };
   const prisma = { $transaction: jest.fn((callback) => callback(tx)) } as unknown as PrismaService;
   const service = new CollectionsLedgerService(prisma);
@@ -116,6 +117,31 @@ describe('CollectionsLedgerService', () => {
     }));
     expect(obligationUpdate).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ status: ObligationStatus.OPEN }),
+    }));
+  });
+
+  it('returns over-allocation to credit when a surcharge is reversed', async () => {
+    adjustmentFindUnique.mockResolvedValue({
+      id: 'adjustment-1', reversedAt: null,
+      obligation: { id: 'obligation-1', teamId: 'team-1' },
+    });
+    obligationFindUniqueOrThrow.mockResolvedValue({
+      id: 'obligation-1', originalAmount: new Prisma.Decimal(70), adjustments: [],
+      allocations: [{
+        id: 'allocation-1', amount: new Prisma.Decimal(100), createdAt: new Date(),
+        payment: { status: CollectionPaymentStatus.POSTED },
+      }],
+    });
+    obligationUpdate.mockResolvedValue({ id: 'obligation-1', status: ObligationStatus.PAID });
+
+    await service.reverseAdjustment('adjustment-1', 'Acréscimo incorreto', user);
+
+    expect(allocationUpdate).toHaveBeenCalledWith({
+      where: { id: 'allocation-1' },
+      data: { amount: new Prisma.Decimal(70) },
+    });
+    expect(obligationUpdate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ allocatedAmount: new Prisma.Decimal(70) }),
     }));
   });
 });

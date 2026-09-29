@@ -2,6 +2,7 @@ import { CategoryType } from '@prisma/client';
 import { CategoriesService } from '../../categories/categories.service';
 import { DirectorsService } from '../../directors/directors.service';
 import { PrismaService } from '../../prisma/prisma.service';
+import { CollectionsReconciliationService } from '../../collections/collections-reconciliation.service';
 
 describe('Tenant isolation for team-owned records', () => {
   const categoryFindMany = jest.fn<Promise<unknown[]>, [unknown]>();
@@ -20,7 +21,8 @@ describe('Tenant isolation for team-owned records', () => {
     $transaction: transaction,
   } as unknown as PrismaService;
   const categories = new CategoriesService(prisma);
-  const directors = new DirectorsService(prisma);
+  const reconciliation = { reconcile: jest.fn() } as unknown as CollectionsReconciliationService;
+  const directors = new DirectorsService(prisma, reconciliation);
 
   beforeEach(() => jest.clearAllMocks());
 
@@ -48,7 +50,7 @@ describe('Tenant isolation for team-owned records', () => {
     memberCreate.mockResolvedValue({ id: 'member-1', roles: [] });
 
     await categories.create({ name: 'Diretoria', type: CategoryType.ENTRADA }, 'team-b');
-    await directors.create({ name: 'Director' }, 'team-b');
+    await directors.create({ name: 'Director' }, 'team-b', 'user-1');
 
     expect(categoryCreate).toHaveBeenCalledWith({
       data: { name: 'Diretoria', type: CategoryType.ENTRADA, teamId: 'team-b' },
@@ -56,5 +58,6 @@ describe('Tenant isolation for team-owned records', () => {
     expect(directorCreate).toHaveBeenCalledWith({
       data: { name: 'Director', teamId: 'team-b', memberId: 'member-1' },
     });
+    expect(reconciliation.reconcile).toHaveBeenCalledWith('team-b', 'user-1');
   });
 });

@@ -252,10 +252,14 @@ export class CollectionsLedgerService {
       return sum;
     }, new Prisma.Decimal(0));
     const expected = Prisma.Decimal.max(0, obligation.originalAmount.plus(adjustment));
-    const allocated = obligation.allocations.reduce(
+    let allocated = obligation.allocations.reduce(
       (sum, item) => item.payment.status === CollectionPaymentStatus.POSTED ? sum.plus(item.amount) : sum,
       new Prisma.Decimal(0),
     );
+    if (!terminal && allocated.gt(expected)) {
+      await this.releaseExcessAllocations(tx, obligation.allocations, allocated.minus(expected));
+      allocated = expected;
+    }
     const status = terminal?.type === AdjustmentType.CANCELLATION
       ? ObligationStatus.CANCELLED
       : terminal?.type === AdjustmentType.WAIVER
@@ -265,6 +269,41 @@ export class CollectionsLedgerService {
       where: { id },
       data: { adjustmentAmount: adjustment, expectedAmount: terminal ? 0 : expected, allocatedAmount: terminal ? 0 : allocated, status },
     });
+  }
+
+  private async releaseExcessAllocations(
+    tx: Prisma.TransactionClient,
+    allocations: Array<{
+      id: string;
+      amount: Prisma.Decimal;
+      createdAt: Date;
+      payment: { status: CollectionPaymentStatus };
+    }>,
+    excessInput: Prisma.Decimal,
+  ) {
+    let excess = excessInput;
+    const posted = allocations
+      .filter((item) => item.payment.status === CollectionPaymentStatus.POSTED)
+      .sort((first, second) => second.createdAt.getTime() - first.createdAt.getTime());
+    for (const allocation of posted) {
+      if (excess.lte(0)) break;
+      if (allocation.amount.lte(excess)) {
+        await tx.collectionAllocation.update({
+          where: { id: allocation.id },
+          data: {
+            releasedAt: new Date(),
+            releaseReason: 'Excedente liberado após recálculo da obrigação.',
+          },
+        });
+        excess = excess.minus(allocation.amount);
+      } else {
+        await tx.collectionAllocation.update({
+          where: { id: allocation.id },
+          data: { amount: allocation.amount.minus(excess) },
+        });
+        excess = new Prisma.Decimal(0);
+      }
+    }
   }
 
   private async runSerializable<T>(operation: (tx: Prisma.TransactionClient) => Promise<T>) {

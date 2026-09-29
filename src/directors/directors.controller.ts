@@ -26,7 +26,7 @@ export class DirectorsController {
   @Post()
   @ApiBody({ type: CreateDirectorDto })
   create(@Body() body: CreateDirectorDto, @CurrentUser() user: AccessTokenPayload) {
-    return this.service.create(body, user.teamId);
+    return this.service.create(body, user.teamId, user.sub);
   }
 
   @Roles(Role.ADMIN)
@@ -37,12 +37,12 @@ export class DirectorsController {
     @Body() body: UpdateDirectorDto,
     @CurrentUser() user: AccessTokenPayload,
   ) {
-    return this.service.update(id, body, user.teamId);
+    return this.service.update(id, body, user.teamId, user.sub);
   }
 
   @Roles(Role.ADMIN)
   @Delete(':id')
   remove(@Param('id', ParseCuidPipe) id: string, @CurrentUser() user: AccessTokenPayload) {
-    return this.service.remove(id, user.teamId);
+    return this.service.remove(id, user.teamId, user.sub);
   }
 }
