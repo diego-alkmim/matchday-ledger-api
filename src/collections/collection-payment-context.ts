@@ -1,5 +1,5 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
-import { CollectionFrequency, GameStatus, Prisma } from '@prisma/client';
+import { CollectionFrequency, GameStatus, ObligationStatus, Prisma } from '@prisma/client';
 import { AccessTokenPayload } from '../auth/interfaces/access-token-payload.interface';
 import { CreateCollectionPaymentDto } from './dto/collections.dto';
 
@@ -33,30 +33,40 @@ export async function loadPaymentContext(
   const activeRoles = member.roles.filter((role) =>
     role.startsAt <= eligibilityDate && (!role.endsAt || role.endsAt >= eligibilityDate),
   );
-  if (
-    !activeRoles.some((role) => role.role === plan.audienceRole) ||
-    plan.effectiveFrom > eligibilityDate ||
-    (plan.inactiveAt && plan.inactiveAt < eligibilityDate)
-  ) {
-    throw new BadRequestException('O plano não está vigente para este participante no período informado.');
-  }
-  const higherPriorityPlan = await tx.collectionPlan.findFirst({
+  const normallyEligible = activeRoles.some((role) => role.role === plan.audienceRole) &&
+    plan.effectiveFrom <= eligibilityDate &&
+    (!plan.inactiveAt || plan.inactiveAt >= eligibilityDate);
+  const outstandingObligation = normallyEligible ? null : await tx.collectionObligation.findFirst({
     where: {
       teamId: user.teamId,
-      exclusiveGroup: plan.exclusiveGroup,
-      audienceRole: { in: activeRoles.map((role) => role.role) },
-      effectiveFrom: { lte: eligibilityDate },
-      OR: [
-        { inactiveAt: null, priority: { gt: plan.priority } },
-        { inactiveAt: { gte: eligibilityDate }, priority: { gt: plan.priority } },
-        { inactiveAt: null, priority: plan.priority, id: { lt: plan.id } },
-        { inactiveAt: { gte: eligibilityDate }, priority: plan.priority, id: { lt: plan.id } },
-      ],
+      memberId: member.id,
+      planId: plan.id,
+      status: { in: [ObligationStatus.OPEN, ObligationStatus.PARTIAL] },
     },
     select: { id: true },
   });
-  if (higherPriorityPlan) {
-    throw new BadRequestException('Outro plano tem prioridade para este participante na data informada.');
+  if (!normallyEligible && !outstandingObligation) {
+    throw new BadRequestException('O plano não está vigente para este participante no período informado.');
   }
-  return { member, plan };
+  if (normallyEligible) {
+    const higherPriorityPlan = await tx.collectionPlan.findFirst({
+      where: {
+        teamId: user.teamId,
+        exclusiveGroup: plan.exclusiveGroup,
+        audienceRole: { in: activeRoles.map((role) => role.role) },
+        effectiveFrom: { lte: eligibilityDate },
+        OR: [
+          { inactiveAt: null, priority: { gt: plan.priority } },
+          { inactiveAt: { gte: eligibilityDate }, priority: { gt: plan.priority } },
+          { inactiveAt: null, priority: plan.priority, id: { lt: plan.id } },
+          { inactiveAt: { gte: eligibilityDate }, priority: plan.priority, id: { lt: plan.id } },
+        ],
+      },
+      select: { id: true },
+    });
+    if (higherPriorityPlan) {
+      throw new BadRequestException('Outro plano tem prioridade para este participante na data informada.');
+    }
+  }
+  return { member, plan, game };
 }

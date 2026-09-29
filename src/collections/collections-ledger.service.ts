@@ -25,7 +25,7 @@ export class CollectionsLedgerService {
         include: { transaction: true, allocations: { include: { obligation: true } } },
       });
       if (existing) return this.assertIdempotentPaymentMatches(existing, dto);
-      const { member, plan } = await loadPaymentContext(tx, dto, user);
+      const { member, plan, game } = await loadPaymentContext(tx, dto, user);
       const transaction = await tx.transaction.create({
         data: {
           teamId: user.teamId,
@@ -57,6 +57,7 @@ export class CollectionsLedgerService {
         plan.exclusiveGroup,
         dto.amount,
         dto.gameId,
+        game?.date,
       );
       return tx.collectionPayment.findUnique({
         where: { id: payment.id },
@@ -85,7 +86,7 @@ export class CollectionsLedgerService {
       where: { teamId, status: CollectionPaymentStatus.POSTED },
       include: {
         allocations: { where: { releasedAt: null } },
-        transaction: { select: { gameId: true } },
+        transaction: { select: { gameId: true, game: { select: { date: true } } } },
         plan: { select: { exclusiveGroup: true } },
       },
       orderBy: { createdAt: 'asc' },
@@ -101,6 +102,7 @@ export class CollectionsLedgerService {
           payment.plan.exclusiveGroup,
           remaining.toNumber(),
           payment.transaction.gameId ?? undefined,
+          payment.transaction.game?.date,
         );
       }
     }
@@ -213,6 +215,7 @@ export class CollectionsLedgerService {
     exclusiveGroup: string,
     amount: number,
     ownGameId?: string,
+    ownGameDate?: Date,
   ) {
     const availableObligations = await tx.collectionObligation.findMany({
       where: {
@@ -222,7 +225,7 @@ export class CollectionsLedgerService {
       },
       orderBy: [{ dueDate: 'asc' }, { createdAt: 'asc' }],
     });
-    const obligations = payableObligations(availableObligations, ownGameId);
+    const obligations = payableObligations(availableObligations, ownGameId, ownGameDate);
     let remaining = new Prisma.Decimal(amount);
     for (const obligation of obligations) {
       const missing = obligation.expectedAmount.minus(obligation.allocatedAmount);

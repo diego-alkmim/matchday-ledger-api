@@ -22,10 +22,12 @@ export async function runSerializable<T>(
 export function payableObligations<T extends { gameId: string | null; dueDate: Date }>(
   obligations: T[],
   ownGameId?: string,
+  ownGameDate?: Date,
 ) {
   const own = ownGameId ? obligations.find((obligation) => obligation.gameId === ownGameId) : undefined;
-  if (ownGameId && !own) return [];
-  const payable = own ? obligations.filter((obligation) => obligation.dueDate <= own.dueDate) : obligations;
+  const cutoff = own?.dueDate ?? ownGameDate;
+  if (ownGameId && !cutoff) return [];
+  const payable = cutoff ? obligations.filter((obligation) => obligation.dueDate <= cutoff) : obligations;
   return payable.sort((a, b) =>
     a.gameId === ownGameId ? -1 : b.gameId === ownGameId ? 1 : a.dueDate.getTime() - b.dueDate.getTime(),
   );

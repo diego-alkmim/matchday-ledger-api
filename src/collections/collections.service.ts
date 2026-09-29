@@ -1,10 +1,18 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { CategoryType, MemberRole, ObligationStatus, Prisma } from '@prisma/client';
+import {
+  CategoryType,
+  MemberRole,
+  ObligationStatus,
+  Prisma,
+} from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AddPlanRateDto, CreateMemberDto, CreatePlanDto } from './dto/collections.dto';
 import { CollectionsReconciliationService } from './collections-reconciliation.service';
 import { CollectionsGenerationService } from './collections-generation.service';
 import { CollectionsLedgerService } from './collections-ledger.service';
+import { refreshUntouchedObligationsForRate } from './collection-rate-recalculation';
+import { generateObligationsThroughToday } from './collections-generation-range';
+import { collectionToday } from './collection-date';
 
 @Injectable()
 export class CollectionsService {
@@ -29,7 +37,7 @@ export class CollectionsService {
       },
       orderBy: { name: 'asc' },
     });
-    const now = this.today();
+    const now = collectionToday();
     return members.map((member) => ({
       ...member,
       active:
@@ -52,29 +60,42 @@ export class CollectionsService {
           data: { teamId, memberId: member.id, name: member.name, contact: member.contact },
         });
       }
-      await this.generateObligationsInTransaction(tx, teamId, new Date(dto.activeFrom));
+      await generateObligationsThroughToday(
+        this.generation, this.ledger, tx, teamId, new Date(dto.activeFrom), collectionToday(),
+      );
       return member;
     });
   }
 
   async deactivateMember(teamId: string, id: string, inactiveAt: string, actorId: string) {
     const date = new Date(inactiveAt);
-    const today = this.today();
+    const today = collectionToday();
     return this.reconciliation.runSerializable(async (tx) => {
       const member = await tx.member.findUnique({
         where: { id_teamId: { id, teamId } },
-        include: { roles: { where: { endsAt: null } } },
+        include: { roles: true },
       });
       if (!member) throw new NotFoundException('Participante não encontrado.');
-      if (date < member.activeFrom || member.roles.some((role) => date < role.startsAt)) {
-        throw new BadRequestException('A data de inativação não pode ser anterior ao início do participante ou de suas funções.');
+      if (date < member.activeFrom) {
+        throw new BadRequestException('A data de inativação não pode ser anterior ao início do participante.');
       }
       const result = await Promise.all([
         tx.member.update({
           where: { id_teamId: { id, teamId } },
           data: { active: date >= today, inactiveAt: date },
         }),
-        tx.memberRoleAssignment.updateMany({ where: { teamId, memberId: id, endsAt: null }, data: { endsAt: date } }),
+        tx.memberRoleAssignment.updateMany({
+          where: {
+            teamId,
+            memberId: id,
+            startsAt: { lte: date },
+            OR: [{ endsAt: null }, { endsAt: { gt: date } }],
+          },
+          data: { endsAt: date },
+        }),
+        tx.memberRoleAssignment.deleteMany({
+          where: { teamId, memberId: id, startsAt: { gt: date } },
+        }),
         tx.director.updateMany({
           where: { teamId, memberId: id },
           data: { active: date >= today },
@@ -111,7 +132,9 @@ export class CollectionsService {
         }
       }
       await this.reconciliation.reconcileInTransaction(tx, teamId, actorId);
-      await this.generateObligationsInTransaction(tx, teamId, startDate);
+      await generateObligationsThroughToday(
+        this.generation, this.ledger, tx, teamId, startDate, collectionToday(),
+      );
       return assignment;
     });
     return result;
@@ -119,9 +142,9 @@ export class CollectionsService {
 
   async endMemberRole(teamId: string, memberId: string, role: MemberRole, endsAt: string, actorId: string) {
     const endDate = new Date(endsAt);
-    const today = this.today();
+    const today = collectionToday();
     const result = await this.reconciliation.runSerializable(async (tx) => {
-      const assignment = await tx.memberRoleAssignment.findFirst({
+      let assignment = await tx.memberRoleAssignment.findFirst({
         where: {
           teamId, memberId, role,
           startsAt: { lte: today },
@@ -129,33 +152,47 @@ export class CollectionsService {
         },
         orderBy: { startsAt: 'desc' },
       });
+      assignment ??= await tx.memberRoleAssignment.findFirst({
+        where: { teamId, memberId, role, startsAt: { gt: today } },
+        orderBy: { startsAt: 'asc' },
+      });
       if (!assignment) throw new NotFoundException('Função ativa não encontrada.');
       if (endDate < assignment.startsAt) {
-        throw new BadRequestException('A função não pode terminar antes de seu início.');
+        await tx.memberRoleAssignment.delete({ where: { id: assignment.id } });
+      } else {
+        await tx.memberRoleAssignment.update({
+          where: { id: assignment.id },
+          data: { endsAt: endDate },
+        });
       }
-      const updated = await tx.memberRoleAssignment.update({
-        where: { id: assignment.id },
-        data: { endsAt: endDate },
-      });
       if (role === MemberRole.DIRECTOR) {
+        const activeDirectorRoles = await tx.memberRoleAssignment.count({
+          where: {
+            teamId, memberId, role: MemberRole.DIRECTOR,
+            startsAt: { lte: today },
+            OR: [{ endsAt: null }, { endsAt: { gte: today } }],
+          },
+        });
         await tx.director.updateMany({
           where: { teamId, memberId },
-          data: { active: endDate >= today },
+          data: { active: activeDirectorRoles > 0 },
         });
       }
-      const activeRoles = await tx.memberRoleAssignment.count({ where: { teamId, memberId, endsAt: null } });
+      const activeRoles = await tx.memberRoleAssignment.count({
+        where: {
+          teamId, memberId,
+          startsAt: { lte: today },
+          OR: [{ endsAt: null }, { endsAt: { gte: today } }],
+        },
+      });
       if (activeRoles === 0) {
-        const latestRole = await tx.memberRoleAssignment.findFirst({
-          where: { teamId, memberId }, orderBy: { endsAt: 'desc' }, select: { endsAt: true },
-        });
-        const inactiveAt = latestRole?.endsAt ?? endDate;
         await tx.member.update({
           where: { id_teamId: { id: memberId, teamId } },
-          data: { active: inactiveAt >= today, inactiveAt },
+          data: { active: false, inactiveAt: endDate < assignment.startsAt ? today : endDate },
         });
       }
       await this.reconciliation.reconcileInTransaction(tx, teamId, actorId);
-      return updated;
+      return { ...assignment, endsAt: endDate < assignment.startsAt ? null : endDate };
     });
     return result;
   }
@@ -166,7 +203,7 @@ export class CollectionsService {
       include: { category: true, rates: { orderBy: { effectiveFrom: 'desc' } } },
       orderBy: [{ active: 'desc' }, { priority: 'desc' }, { name: 'asc' }],
     });
-    const now = this.today();
+    const now = collectionToday();
     return plans.map((plan) => ({
       ...plan,
       active: plan.effectiveFrom <= now && (!plan.inactiveAt || plan.inactiveAt >= now),
@@ -193,23 +230,36 @@ export class CollectionsService {
         include: { rates: true, category: true },
       });
       await this.reconciliation.reconcileInTransaction(tx, teamId, actorId);
-      await this.generateObligationsInTransaction(tx, teamId, new Date(dto.effectiveFrom));
+      await generateObligationsThroughToday(
+        this.generation, this.ledger, tx, teamId, new Date(dto.effectiveFrom), collectionToday(),
+      );
       return plan;
     });
   }
 
   async addRate(teamId: string, planId: string, dto: AddPlanRateDto) {
-    const plan = await this.prisma.collectionPlan.findUnique({ where: { id_teamId: { id: planId, teamId } } });
-    if (!plan) throw new NotFoundException('Plano não encontrado.');
-    if (new Date(dto.effectiveFrom) < plan.effectiveFrom) {
-      throw new BadRequestException('A vigência da tarifa não pode ser anterior ao início do plano.');
-    }
-    return this.prisma.collectionPlanRate.create({ data: { planId, amount: dto.amount, effectiveFrom: new Date(dto.effectiveFrom) } });
+    const effectiveFrom = new Date(dto.effectiveFrom);
+    return this.reconciliation.runSerializable(async (tx) => {
+      const plan = await tx.collectionPlan.findUnique({
+        where: { id_teamId: { id: planId, teamId } },
+        include: { rates: true },
+      });
+      if (!plan) throw new NotFoundException('Plano não encontrado.');
+      if (effectiveFrom < plan.effectiveFrom) {
+        throw new BadRequestException('A vigência da tarifa não pode ser anterior ao início do plano.');
+      }
+      const rate = await tx.collectionPlanRate.create({
+        data: { planId, amount: dto.amount, effectiveFrom },
+      });
+      await refreshUntouchedObligationsForRate(tx, teamId, plan, rate);
+      await this.ledger.applyAvailableCreditsInTransaction(tx, teamId);
+      return rate;
+    });
   }
 
   async deactivatePlan(teamId: string, planId: string, inactiveAt: string, actorId: string) {
     const date = new Date(inactiveAt);
-    const today = this.today();
+    const today = collectionToday();
     return this.reconciliation.runSerializable(async (tx) => {
       const currentPlan = await tx.collectionPlan.findUnique({ where: { id_teamId: { id: planId, teamId } } });
       if (!currentPlan) throw new NotFoundException('Plano não encontrado.');
@@ -293,29 +343,4 @@ export class CollectionsService {
     };
   }
 
-  private today() {
-    const value = new Intl.DateTimeFormat('en-CA', {
-      timeZone: 'America/Sao_Paulo',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    }).format(new Date());
-    return new Date(`${value}T00:00:00.000Z`);
-  }
-
-  private async generateObligationsInTransaction(
-    tx: Prisma.TransactionClient,
-    teamId: string,
-    from: Date,
-  ) {
-    const to = this.today();
-    if (from > to) return;
-    await this.generation.generateInTransaction(
-      tx,
-      teamId,
-      from.toISOString().slice(0, 10),
-      to.toISOString().slice(0, 10),
-    );
-    await this.ledger.applyAvailableCreditsInTransaction(tx, teamId);
-  }
 }

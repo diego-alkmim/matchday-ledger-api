@@ -68,7 +68,9 @@ describe('GamesService tenant isolation', () => {
   });
 
   it('blocks financial game changes after a transaction exists', async () => {
-    findUnique.mockResolvedValue({ id: 'game-1', date: new Date('2026-09-26') });
+    findUnique.mockResolvedValue({
+      id: 'game-1', date: new Date('2026-09-26'), expectedContributionPerDirector: 70,
+    });
     transactionCount.mockResolvedValue(1);
     obligationFindMany.mockResolvedValue([]);
 
@@ -77,5 +79,27 @@ describe('GamesService tenant isolation', () => {
     )).rejects.toThrow('Não é possível alterar data ou valor de um jogo com movimentação financeira.');
 
     expect(update).not.toHaveBeenCalled();
+  });
+
+  it('allows non-financial edits when unchanged financial fields are resent', async () => {
+    const current = {
+      id: 'game-1', date: new Date('2026-09-26T12:00:00.000Z'),
+      expectedContributionPerDirector: 70,
+    };
+    findUnique.mockResolvedValue(current);
+    update.mockResolvedValue({ ...current, opponent: 'Novo rival', status: GameStatus.FECHADO });
+
+    await service.update('game-1', {
+      date: '2026-09-26T12:00:00.000Z',
+      expectedContributionPerDirector: 70,
+      opponent: 'Novo rival',
+      status: GameStatus.FECHADO,
+    }, 'team-1');
+
+    expect(transactionCount).not.toHaveBeenCalled();
+    expect(obligationDeleteMany).not.toHaveBeenCalled();
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ opponent: 'Novo rival', status: GameStatus.FECHADO }),
+    }));
   });
 });

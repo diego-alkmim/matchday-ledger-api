@@ -21,6 +21,7 @@ describe('CollectionsLedgerService', () => {
   const transactionCreate = jest.fn();
   const paymentCreate = jest.fn();
   const obligationFindUnique = jest.fn();
+  const obligationFindFirst = jest.fn();
   const obligationFindUniqueOrThrow = jest.fn();
   const obligationFindMany = jest.fn();
   const obligationUpdate = jest.fn();
@@ -37,7 +38,10 @@ describe('CollectionsLedgerService', () => {
   const tx = {
     collectionPayment: { findUnique: paymentFindUnique, findMany: paymentFindMany, update: paymentUpdate, create: paymentCreate },
     transaction: { update: transactionUpdate, create: transactionCreate },
-    collectionObligation: { findUnique: obligationFindUnique, findUniqueOrThrow: obligationFindUniqueOrThrow, findMany: obligationFindMany, update: obligationUpdate },
+    collectionObligation: {
+      findUnique: obligationFindUnique, findFirst: obligationFindFirst,
+      findUniqueOrThrow: obligationFindUniqueOrThrow, findMany: obligationFindMany, update: obligationUpdate,
+    },
     collectionAdjustment: { create: adjustmentCreate, findUnique: adjustmentFindUnique, update: adjustmentUpdate },
     collectionAllocation: { updateMany: allocationUpdateMany, upsert: allocationUpsert, update: allocationUpdate },
     member: { findUnique: memberFindUnique },
@@ -138,6 +142,33 @@ describe('CollectionsLedgerService', () => {
     });
   });
 
+  it('accepts payment of an outstanding obligation after the member role ended', async () => {
+    const result = { id: 'payment-1', transaction: {}, allocations: [] };
+    paymentFindUnique.mockResolvedValueOnce(null).mockResolvedValueOnce(result);
+    memberFindUnique.mockResolvedValue({
+      id: 'member-1',
+      roles: [{ role: MemberRole.PLAYER, startsAt: new Date('2026-01-01'), endsAt: new Date('2026-08-31') }],
+    });
+    planFindUnique.mockResolvedValue({
+      id: 'plan-1', audienceRole: MemberRole.PLAYER, frequency: CollectionFrequency.MONTHLY,
+      exclusiveGroup: 'membership', priority: 50, categoryId: 'category-1',
+      effectiveFrom: new Date('2026-01-01'), inactiveAt: new Date('2026-08-31'),
+    });
+    obligationFindFirst.mockResolvedValue({ id: 'obligation-1' });
+    transactionCreate.mockResolvedValue({ id: 'transaction-1' });
+    paymentCreate.mockResolvedValue({ id: 'payment-1' });
+    obligationFindMany.mockResolvedValue([]);
+
+    await expect(service.createPayment({
+      memberId: 'member-1', planId: 'plan-1', amount: 70,
+      date: '2026-09-20', paymentMethod: 'PIX',
+    }, user)).resolves.toBe(result);
+
+    expect(obligationFindFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ memberId: 'member-1', planId: 'plan-1' }),
+    }));
+  });
+
   it('reverses the payment and transaction while preserving allocation history', async () => {
     paymentFindUnique.mockResolvedValue({
       id: 'payment-1', teamId: 'team-1', transactionId: 'transaction-1',
@@ -225,6 +256,35 @@ describe('CollectionsLedgerService', () => {
     expect(allocationUpsert).toHaveBeenCalledTimes(1);
     expect(allocationUpsert).toHaveBeenCalledWith(expect.objectContaining({
       create: expect.objectContaining({ obligationId: 'own' }),
+    }));
+  });
+
+  it('uses an open game date as the cutoff when an inactive member has only older debts', async () => {
+    obligationFindMany.mockResolvedValue([
+      { id: 'past', gameId: 'game-old', dueDate: new Date('2026-08-10'), expectedAmount: new Prisma.Decimal(70), allocatedAmount: new Prisma.Decimal(0) },
+      { id: 'future', gameId: 'game-future', dueDate: new Date('2026-10-10'), expectedAmount: new Prisma.Decimal(70), allocatedAmount: new Prisma.Decimal(0) },
+    ]);
+    obligationFindUniqueOrThrow.mockResolvedValue({
+      id: 'past', originalAmount: new Prisma.Decimal(70), adjustments: [], allocations: [],
+    });
+
+    await (service as unknown as {
+      allocatePayment: (
+        transaction: typeof tx,
+        paymentId: string,
+        memberId: string,
+        group: string,
+        amount: number,
+        ownGameId: string,
+        ownGameDate: Date,
+      ) => Promise<void>;
+    }).allocatePayment(
+      tx, 'payment-1', 'member-1', 'membership', 70, 'game-current', new Date('2026-09-20'),
+    );
+
+    expect(allocationUpsert).toHaveBeenCalledTimes(1);
+    expect(allocationUpsert).toHaveBeenCalledWith(expect.objectContaining({
+      create: expect.objectContaining({ obligationId: 'past' }),
     }));
   });
 

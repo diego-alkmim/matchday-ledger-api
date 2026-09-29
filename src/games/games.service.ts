@@ -38,7 +38,11 @@ export class GamesService {
     const game = await this.reconciliation.runSerializable(async (tx) => {
       const current = await tx.game.findUnique({ where: { id_teamId: { id, teamId } } });
       if (!current) throw new NotFoundException(domainErrors.gameNotFound);
-      const financialChange = data.date !== undefined || data.expectedContributionPerDirector !== undefined;
+      const dateChanged = data.date !== undefined &&
+        new Date(data.date).getTime() !== current.date.getTime();
+      const contributionChanged = data.expectedContributionPerDirector !== undefined &&
+        Number(data.expectedContributionPerDirector) !== Number(current.expectedContributionPerDirector);
+      const financialChange = dateChanged || contributionChanged;
       if (financialChange) {
         const [transactions, obligations] = await Promise.all([
           tx.transaction.count({ where: { teamId, gameId: id } }),
