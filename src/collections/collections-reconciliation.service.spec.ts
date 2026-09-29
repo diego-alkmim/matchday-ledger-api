@@ -15,16 +15,17 @@ describe('CollectionsReconciliationService', () => {
   const allocationUpdateMany = jest.fn();
   const obligationUpdate = jest.fn();
   const tx = {
+    collectionPlan: { findMany: planFindMany },
     collectionAdjustment: { create: adjustmentCreate },
     collectionAllocation: { updateMany: allocationUpdateMany },
-    collectionObligation: { update: obligationUpdate },
+    collectionObligation: { findMany: obligationFindMany, update: obligationUpdate },
   };
   const prisma = {
     collectionPlan: { findMany: planFindMany },
     collectionObligation: { findMany: obligationFindMany },
     $transaction: jest.fn((callback) => callback(tx)),
   } as unknown as PrismaService;
-  const ledger = { applyAvailableCredits: jest.fn() } as unknown as CollectionsLedgerService;
+  const ledger = { applyAvailableCreditsInTransaction: jest.fn() } as unknown as CollectionsLedgerService;
   const service = new CollectionsReconciliationService(prisma, ledger);
 
   beforeEach(() => jest.clearAllMocks());
@@ -58,6 +59,6 @@ describe('CollectionsReconciliationService', () => {
       where: { id: 'obligation-1' },
       data: { status: ObligationStatus.CANCELLED, expectedAmount: 0, allocatedAmount: 0 },
     });
-    expect(ledger.applyAvailableCredits).toHaveBeenCalledWith('team-1');
+    expect(ledger.applyAvailableCreditsInTransaction).toHaveBeenCalledWith(tx, 'team-1');
   });
 });

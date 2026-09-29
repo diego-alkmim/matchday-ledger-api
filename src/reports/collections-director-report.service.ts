@@ -7,12 +7,16 @@ import {
   ObligationStatus,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { CollectionsGenerationService } from '../collections/collections-generation.service';
+import { CollectionsLedgerService } from '../collections/collections-ledger.service';
 import {
   buildContributionObligations,
   buildDirectorConsolidation,
   ContributionObligation,
   groupPaymentsByDirector,
 } from './director-consolidation';
+import { historicalDirectorWhere } from './historical-directors';
+import { collectionGenerationRange, isInCollectionRange } from './collection-report-range';
 
 type DirectorReportEntry = ReturnType<typeof buildDirectorConsolidation>;
 type ConsolidatedReport = {
@@ -30,7 +34,11 @@ type ConsolidatedReport = {
 
 @Injectable()
 export class CollectionsDirectorReportService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private generation: CollectionsGenerationService,
+    private ledger: CollectionsLedgerService,
+  ) {}
 
   async build(teamId: string, from?: string, to?: string) {
     const dateFilter = {
@@ -47,12 +55,17 @@ export class CollectionsDirectorReportService {
       select: { id: true, frequency: true, exclusiveGroup: true, effectiveFrom: true },
     });
     if (!plans.length) return null;
+    const generationRange = collectionGenerationRange(from, to, plans.map((plan) => plan.effectiveFrom));
+    await this.generation.generate(teamId, generationRange.from, generationRange.to);
+    await this.ledger.applyAvailableCredits(teamId);
+    const planIds = plans.map((plan) => plan.id);
+    const planIdSet = new Set(planIds);
 
     const [obligations, payments] = await Promise.all([
       this.prisma.collectionObligation.findMany({
         where: {
           teamId,
-          planId: { in: plans.map((plan) => plan.id) },
+          planId: { in: planIds },
           dueDate: dateFilter,
           status: { notIn: [ObligationStatus.CANCELLED, ObligationStatus.WAIVED] },
         },
@@ -70,18 +83,36 @@ export class CollectionsDirectorReportService {
         where: {
           teamId,
           status: CollectionPaymentStatus.POSTED,
-          planId: { in: plans.map((plan) => plan.id) },
-          ...(from || to ? { transaction: { date: dateFilter } } : {}),
+          OR: [
+            { planId: { in: planIds } },
+            { allocations: { some: { releasedAt: null, obligation: { planId: { in: planIds } } } } },
+          ],
         },
-        select: { memberId: true, amount: true },
+        select: {
+          memberId: true,
+          planId: true,
+          amount: true,
+          transaction: { select: { date: true } },
+          allocations: {
+            where: { releasedAt: null },
+            select: { amount: true, obligation: { select: { planId: true, dueDate: true } } },
+          },
+        },
       }),
     ]);
 
     const paidByMember = new Map<string, number>();
     for (const payment of payments) {
+      const allocatedToReport = payment.allocations
+        .filter((allocation) => planIdSet.has(allocation.obligation.planId) && isInCollectionRange(allocation.obligation.dueDate, from, to))
+        .reduce((sum, allocation) => sum + Number(allocation.amount), 0);
+      const allocatedTotal = payment.allocations.reduce((sum, allocation) => sum + Number(allocation.amount), 0);
+      const availableDirectorCredit = planIdSet.has(payment.planId) && isInCollectionRange(payment.transaction.date, from, to)
+        ? Math.max(Number(payment.amount) - allocatedTotal, 0)
+        : 0;
       paidByMember.set(
         payment.memberId,
-        this.money((paidByMember.get(payment.memberId) ?? 0) + Number(payment.amount)),
+        this.money((paidByMember.get(payment.memberId) ?? 0) + allocatedToReport + availableDirectorCredit),
       );
     }
 
@@ -177,7 +208,7 @@ export class CollectionsDirectorReportService {
         },
       }),
       this.prisma.director.findMany({
-        where: { teamId, active: true },
+        where: historicalDirectorWhere(teamId, gameDate),
         orderBy: { name: 'asc' },
         select: { id: true, name: true, contact: true },
       }),

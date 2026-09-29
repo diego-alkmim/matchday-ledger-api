@@ -6,6 +6,7 @@ import {
   MemberRoleAssignment,
   ObligationStatus,
   ProrationPolicy,
+  Prisma,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CollectionsLedgerService } from './collections-ledger.service';
@@ -18,9 +19,13 @@ export class CollectionsReconciliationService {
   ) {}
 
   async reconcile(teamId: string, actorId: string) {
+    return this.prisma.$transaction((tx) => this.reconcileInTransaction(tx, teamId, actorId));
+  }
+
+  async reconcileInTransaction(tx: Prisma.TransactionClient, teamId: string, actorId: string) {
     const [plans, obligations] = await Promise.all([
-      this.prisma.collectionPlan.findMany({ where: { teamId } }),
-      this.prisma.collectionObligation.findMany({
+      tx.collectionPlan.findMany({ where: { teamId } }),
+      tx.collectionObligation.findMany({
         where: {
           teamId,
           status: { in: [ObligationStatus.OPEN, ObligationStatus.PARTIAL, ObligationStatus.PAID] },
@@ -34,9 +39,7 @@ export class CollectionsReconciliationService {
       return !this.planWinsAt(obligation.plan, plans, obligation.member.roles, referenceDate);
     });
 
-    if (!ineligible.length) return { cancelled: 0 };
-
-    await this.prisma.$transaction(async (tx) => {
+    if (ineligible.length) {
       const now = new Date();
       for (const obligation of ineligible) {
         await tx.collectionAdjustment.create({
@@ -57,9 +60,9 @@ export class CollectionsReconciliationService {
           data: { status: ObligationStatus.CANCELLED, expectedAmount: 0, allocatedAmount: 0 },
         });
       }
-    });
+    }
 
-    await this.ledger.applyAvailableCredits(teamId);
+    await this.ledger.applyAvailableCreditsInTransaction(tx, teamId);
     return { cancelled: ineligible.length };
   }
 

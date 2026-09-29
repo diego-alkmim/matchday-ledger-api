@@ -21,7 +21,7 @@ describe('Tenant isolation for team-owned records', () => {
     $transaction: transaction,
   } as unknown as PrismaService;
   const categories = new CategoriesService(prisma);
-  const reconciliation = { reconcile: jest.fn() } as unknown as CollectionsReconciliationService;
+  const reconciliation = { reconcileInTransaction: jest.fn() } as unknown as CollectionsReconciliationService;
   const directors = new DirectorsService(prisma, reconciliation);
 
   beforeEach(() => jest.clearAllMocks());
@@ -58,6 +58,10 @@ describe('Tenant isolation for team-owned records', () => {
     expect(directorCreate).toHaveBeenCalledWith({
       data: { name: 'Director', teamId: 'team-b', memberId: 'member-1' },
     });
-    expect(reconciliation.reconcile).toHaveBeenCalledWith('team-b', 'user-1');
+    expect(reconciliation.reconcileInTransaction).toHaveBeenCalledWith(
+      prisma,
+      'team-b',
+      'user-1',
+    );
   });
 });

@@ -94,31 +94,33 @@ export class CollectionsLedgerService {
   }
 
   async applyAvailableCredits(teamId: string) {
-    return this.runSerializable(async (tx) => {
-      const payments = await tx.collectionPayment.findMany({
-        where: { teamId, status: CollectionPaymentStatus.POSTED },
-        include: {
-          allocations: { where: { releasedAt: null } },
-          transaction: { select: { gameId: true } },
-          plan: { select: { exclusiveGroup: true } },
-        },
-        orderBy: { createdAt: 'asc' },
-      });
-      for (const payment of payments) {
-        const allocated = payment.allocations.reduce((sum, item) => sum.plus(item.amount), new Prisma.Decimal(0));
-        const remaining = payment.amount.minus(allocated);
-        if (remaining.gt(0)) {
-          await this.allocatePayment(
-            tx,
-            payment.id,
-            payment.memberId,
-            payment.plan.exclusiveGroup,
-            remaining.toNumber(),
-            payment.transaction.gameId ?? undefined,
-          );
-        }
-      }
+    return this.runSerializable((tx) => this.applyAvailableCreditsInTransaction(tx, teamId));
+  }
+
+  async applyAvailableCreditsInTransaction(tx: Prisma.TransactionClient, teamId: string) {
+    const payments = await tx.collectionPayment.findMany({
+      where: { teamId, status: CollectionPaymentStatus.POSTED },
+      include: {
+        allocations: { where: { releasedAt: null } },
+        transaction: { select: { gameId: true } },
+        plan: { select: { exclusiveGroup: true } },
+      },
+      orderBy: { createdAt: 'asc' },
     });
+    for (const payment of payments) {
+      const allocated = payment.allocations.reduce((sum, item) => sum.plus(item.amount), new Prisma.Decimal(0));
+      const remaining = payment.amount.minus(allocated);
+      if (remaining.gt(0)) {
+        await this.allocatePayment(
+          tx,
+          payment.id,
+          payment.memberId,
+          payment.plan.exclusiveGroup,
+          remaining.toNumber(),
+          payment.transaction.gameId ?? undefined,
+        );
+      }
+    }
   }
 
   async reversePayment(id: string, reason: string, user: AccessTokenPayload) {

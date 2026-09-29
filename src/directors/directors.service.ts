@@ -62,9 +62,10 @@ export class DirectorsService {
           data: { teamId, memberId: member.id, role: MemberRole.DIRECTOR, startsAt: activeFrom },
         });
       }
-      return tx.director.create({ data: { ...data, teamId, memberId: member.id } });
+      const director = await tx.director.create({ data: { ...data, teamId, memberId: member.id } });
+      await this.reconciliation.reconcileInTransaction(tx, teamId, actorId);
+      return director;
     });
-    await this.reconciliation.reconcile(teamId, actorId);
     return director;
   }
 
@@ -110,9 +111,11 @@ export class DirectorsService {
           }
         }
       }
+      if (data.active !== undefined) {
+        await this.reconciliation.reconcileInTransaction(tx, teamId, actorId);
+      }
       return director;
     });
-    if (data.active !== undefined) await this.reconciliation.reconcile(teamId, actorId);
     return director;
   }
 
@@ -131,9 +134,9 @@ export class DirectorsService {
           await tx.member.update({ where: { id_teamId: { id: director.memberId, teamId } }, data: { active: false, inactiveAt } });
         }
       }
+      await this.reconciliation.reconcileInTransaction(tx, teamId, actorId);
       return updated;
     });
-    await this.reconciliation.reconcile(teamId, actorId);
     return updated;
   }
 

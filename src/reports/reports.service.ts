@@ -9,6 +9,7 @@ import {
 } from './director-consolidation';
 import { AnalyticalByGameQueryDto } from './dto/analytical-by-game-query.dto';
 import { CollectionsDirectorReportService } from './collections-director-report.service';
+import { historicalDirectorWhere } from './historical-directors';
 
 function buildContributionDateFilter(
   from: string | undefined,
@@ -194,7 +195,11 @@ export class ReportsService {
           expectedContributionPerDirector: true,
         },
       }),
-      this.prisma.director.findMany({ where: { teamId, active: true }, orderBy: { name: 'asc' }, select: { id: true, name: true, contact: true } }),
+      this.prisma.director.findMany({
+        where: historicalDirectorWhere(teamId, gameDateFilter),
+        orderBy: { name: 'asc' },
+        select: { id: true, name: true, contact: true },
+      }),
       this.prisma.transaction.findMany({
         where: {
           teamId,

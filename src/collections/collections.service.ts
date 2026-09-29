@@ -57,19 +57,21 @@ export class CollectionsService {
     const today = this.today();
     const member = await this.prisma.member.findUnique({ where: { id_teamId: { id, teamId } } });
     if (!member) throw new NotFoundException('Participante não encontrado.');
-    const result = await this.prisma.$transaction([
-      this.prisma.member.update({
-        where: { id_teamId: { id, teamId } },
-        data: { active: date >= today, inactiveAt: date },
-      }),
-      this.prisma.memberRoleAssignment.updateMany({ where: { teamId, memberId: id, endsAt: null }, data: { endsAt: date } }),
-      this.prisma.director.updateMany({
-        where: { teamId, memberId: id },
-        data: { active: date >= today },
-      }),
-    ]);
-    await this.reconciliation.reconcile(teamId, actorId);
-    return result;
+    return this.prisma.$transaction(async (tx) => {
+      const result = await Promise.all([
+        tx.member.update({
+          where: { id_teamId: { id, teamId } },
+          data: { active: date >= today, inactiveAt: date },
+        }),
+        tx.memberRoleAssignment.updateMany({ where: { teamId, memberId: id, endsAt: null }, data: { endsAt: date } }),
+        tx.director.updateMany({
+          where: { teamId, memberId: id },
+          data: { active: date >= today },
+        }),
+      ]);
+      await this.reconciliation.reconcileInTransaction(tx, teamId, actorId);
+      return result;
+    });
   }
 
   async addMemberRole(teamId: string, memberId: string, role: MemberRole, startsAt: string, actorId: string) {
@@ -93,9 +95,9 @@ export class CollectionsService {
           await tx.director.create({ data: { teamId, memberId, name: member.name, contact: member.contact } });
         }
       }
+      await this.reconciliation.reconcileInTransaction(tx, teamId, actorId);
       return assignment;
     });
-    await this.reconciliation.reconcile(teamId, actorId);
     return result;
   }
 
@@ -121,9 +123,9 @@ export class CollectionsService {
           data: { active: endDate >= today, inactiveAt: endDate },
         });
       }
+      await this.reconciliation.reconcileInTransaction(tx, teamId, actorId);
       return result;
     });
-    await this.reconciliation.reconcile(teamId, actorId);
     return result;
   }
 
@@ -148,18 +150,20 @@ export class CollectionsService {
     if (dto.frequency === 'MONTHLY' && !dto.dueDay) {
       throw new BadRequestException('Informe o dia de vencimento do plano mensal.');
     }
-    const plan = await this.prisma.collectionPlan.create({
-      data: {
-        teamId, name: dto.name.trim(), audienceRole: dto.audienceRole, frequency: dto.frequency,
-        categoryId: dto.categoryId, priority: dto.priority, exclusiveGroup: dto.exclusiveGroup,
-        dueDay: dto.frequency === 'MONTHLY' ? dto.dueDay : null,
-        prorationPolicy: dto.prorationPolicy, effectiveFrom: new Date(dto.effectiveFrom),
-        rates: { create: { amount: dto.amount, effectiveFrom: new Date(dto.effectiveFrom) } },
-      },
-      include: { rates: true, category: true },
+    return this.prisma.$transaction(async (tx) => {
+      const plan = await tx.collectionPlan.create({
+        data: {
+          teamId, name: dto.name.trim(), audienceRole: dto.audienceRole, frequency: dto.frequency,
+          categoryId: dto.categoryId, priority: dto.priority, exclusiveGroup: dto.exclusiveGroup,
+          dueDay: dto.frequency === 'MONTHLY' ? dto.dueDay : null,
+          prorationPolicy: dto.prorationPolicy, effectiveFrom: new Date(dto.effectiveFrom),
+          rates: { create: { amount: dto.amount, effectiveFrom: new Date(dto.effectiveFrom) } },
+        },
+        include: { rates: true, category: true },
+      });
+      await this.reconciliation.reconcileInTransaction(tx, teamId, actorId);
+      return plan;
     });
-    await this.reconciliation.reconcile(teamId, actorId);
-    return plan;
   }
 
   async addRate(teamId: string, planId: string, dto: AddPlanRateDto) {
@@ -171,12 +175,14 @@ export class CollectionsService {
   async deactivatePlan(teamId: string, planId: string, inactiveAt: string, actorId: string) {
     const date = new Date(inactiveAt);
     const today = this.today();
-    const plan = await this.prisma.collectionPlan.update({
-      where: { id_teamId: { id: planId, teamId } },
-      data: { active: date >= today, inactiveAt: date },
+    return this.prisma.$transaction(async (tx) => {
+      const plan = await tx.collectionPlan.update({
+        where: { id_teamId: { id: planId, teamId } },
+        data: { active: date >= today, inactiveAt: date },
+      });
+      await this.reconciliation.reconcileInTransaction(tx, teamId, actorId);
+      return plan;
     });
-    await this.reconciliation.reconcile(teamId, actorId);
-    return plan;
   }
 
   async summary(teamId: string, from?: string, to?: string) {
