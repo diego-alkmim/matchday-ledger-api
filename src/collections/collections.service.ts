@@ -2,13 +2,17 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { CategoryType, MemberRole, ObligationStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AddPlanRateDto, CreateMemberDto, CreatePlanDto } from './dto/collections.dto';
+import { CollectionsReconciliationService } from './collections-reconciliation.service';
 
 @Injectable()
 export class CollectionsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private reconciliation: CollectionsReconciliationService,
+  ) {}
 
-  listMembers(teamId: string) {
-    return this.prisma.member.findMany({
+  async listMembers(teamId: string) {
+    const members = await this.prisma.member.findMany({
       where: { teamId },
       select: {
         id: true,
@@ -21,6 +25,13 @@ export class CollectionsService {
       },
       orderBy: { name: 'asc' },
     });
+    const now = this.today();
+    return members.map((member) => ({
+      ...member,
+      active:
+        member.activeFrom <= now &&
+        member.roles.some((role) => role.startsAt <= now && (!role.endsAt || role.endsAt >= now)),
+    }));
   }
 
   createMember(teamId: string, dto: CreateMemberDto) {
@@ -41,19 +52,28 @@ export class CollectionsService {
     });
   }
 
-  async deactivateMember(teamId: string, id: string, inactiveAt: string) {
+  async deactivateMember(teamId: string, id: string, inactiveAt: string, actorId: string) {
     const date = new Date(inactiveAt);
+    const today = this.today();
     const member = await this.prisma.member.findUnique({ where: { id_teamId: { id, teamId } } });
     if (!member) throw new NotFoundException('Participante não encontrado.');
-    return this.prisma.$transaction([
-      this.prisma.member.update({ where: { id_teamId: { id, teamId } }, data: { active: false, inactiveAt: date } }),
+    const result = await this.prisma.$transaction([
+      this.prisma.member.update({
+        where: { id_teamId: { id, teamId } },
+        data: { active: date >= today, inactiveAt: date },
+      }),
       this.prisma.memberRoleAssignment.updateMany({ where: { teamId, memberId: id, endsAt: null }, data: { endsAt: date } }),
-      this.prisma.director.updateMany({ where: { teamId, memberId: id }, data: { active: false } }),
+      this.prisma.director.updateMany({
+        where: { teamId, memberId: id },
+        data: { active: date >= today },
+      }),
     ]);
+    await this.reconciliation.reconcile(teamId, actorId);
+    return result;
   }
 
-  async addMemberRole(teamId: string, memberId: string, role: MemberRole, startsAt: string) {
-    return this.prisma.$transaction(async (tx) => {
+  async addMemberRole(teamId: string, memberId: string, role: MemberRole, startsAt: string, actorId: string) {
+    const result = await this.prisma.$transaction(async (tx) => {
       const member = await tx.member.findUnique({
         where: { id_teamId: { id: memberId, teamId } },
         include: { roles: true, director: true },
@@ -75,35 +95,52 @@ export class CollectionsService {
       }
       return assignment;
     });
+    await this.reconciliation.reconcile(teamId, actorId);
+    return result;
   }
 
-  async endMemberRole(teamId: string, memberId: string, role: MemberRole, endsAt: string) {
-    return this.prisma.$transaction(async (tx) => {
+  async endMemberRole(teamId: string, memberId: string, role: MemberRole, endsAt: string, actorId: string) {
+    const endDate = new Date(endsAt);
+    const today = this.today();
+    const result = await this.prisma.$transaction(async (tx) => {
       const result = await tx.memberRoleAssignment.updateMany({
         where: { teamId, memberId, role, endsAt: null },
-        data: { endsAt: new Date(endsAt) },
+        data: { endsAt: endDate },
       });
       if (result.count === 0) throw new NotFoundException('Função ativa não encontrada.');
       if (role === MemberRole.DIRECTOR) {
-        await tx.director.updateMany({ where: { teamId, memberId }, data: { active: false } });
+        await tx.director.updateMany({
+          where: { teamId, memberId },
+          data: { active: endDate >= today },
+        });
       }
       const activeRoles = await tx.memberRoleAssignment.count({ where: { teamId, memberId, endsAt: null } });
       if (activeRoles === 0) {
-        await tx.member.update({ where: { id_teamId: { id: memberId, teamId } }, data: { active: false, inactiveAt: new Date(endsAt) } });
+        await tx.member.update({
+          where: { id_teamId: { id: memberId, teamId } },
+          data: { active: endDate >= today, inactiveAt: endDate },
+        });
       }
       return result;
     });
+    await this.reconciliation.reconcile(teamId, actorId);
+    return result;
   }
 
-  listPlans(teamId: string) {
-    return this.prisma.collectionPlan.findMany({
+  async listPlans(teamId: string) {
+    const plans = await this.prisma.collectionPlan.findMany({
       where: { teamId },
       include: { category: true, rates: { orderBy: { effectiveFrom: 'desc' } } },
       orderBy: [{ active: 'desc' }, { priority: 'desc' }, { name: 'asc' }],
     });
+    const now = this.today();
+    return plans.map((plan) => ({
+      ...plan,
+      active: plan.effectiveFrom <= now && (!plan.inactiveAt || plan.inactiveAt >= now),
+    }));
   }
 
-  async createPlan(teamId: string, dto: CreatePlanDto) {
+  async createPlan(teamId: string, dto: CreatePlanDto, actorId: string) {
     const category = await this.prisma.category.findUnique({ where: { id_teamId: { id: dto.categoryId, teamId } } });
     if (!category || category.type !== CategoryType.ENTRADA) {
       throw new BadRequestException('Selecione uma categoria de entrada do time.');
@@ -111,7 +148,7 @@ export class CollectionsService {
     if (dto.frequency === 'MONTHLY' && !dto.dueDay) {
       throw new BadRequestException('Informe o dia de vencimento do plano mensal.');
     }
-    return this.prisma.collectionPlan.create({
+    const plan = await this.prisma.collectionPlan.create({
       data: {
         teamId, name: dto.name.trim(), audienceRole: dto.audienceRole, frequency: dto.frequency,
         categoryId: dto.categoryId, priority: dto.priority, exclusiveGroup: dto.exclusiveGroup,
@@ -121,6 +158,8 @@ export class CollectionsService {
       },
       include: { rates: true, category: true },
     });
+    await this.reconciliation.reconcile(teamId, actorId);
+    return plan;
   }
 
   async addRate(teamId: string, planId: string, dto: AddPlanRateDto) {
@@ -129,11 +168,15 @@ export class CollectionsService {
     return this.prisma.collectionPlanRate.create({ data: { planId, amount: dto.amount, effectiveFrom: new Date(dto.effectiveFrom) } });
   }
 
-  async deactivatePlan(teamId: string, planId: string, inactiveAt: string) {
-    return this.prisma.collectionPlan.update({
+  async deactivatePlan(teamId: string, planId: string, inactiveAt: string, actorId: string) {
+    const date = new Date(inactiveAt);
+    const today = this.today();
+    const plan = await this.prisma.collectionPlan.update({
       where: { id_teamId: { id: planId, teamId } },
-      data: { active: false, inactiveAt: new Date(inactiveAt) },
+      data: { active: date >= today, inactiveAt: date },
     });
+    await this.reconciliation.reconcile(teamId, actorId);
+    return plan;
   }
 
   async summary(teamId: string, from?: string, to?: string) {
@@ -150,6 +193,11 @@ export class CollectionsService {
         member: { select: { id: true, name: true } },
         plan: { select: { id: true, name: true } },
         game: { select: { opponent: true, date: true } },
+        adjustments: {
+          where: { reversedAt: null },
+          select: { id: true, type: true, amount: true, reason: true, createdAt: true },
+          orderBy: { createdAt: 'desc' },
+        },
       },
       orderBy: [{ dueDate: 'asc' }, { member: { name: 'asc' } }],
     });
@@ -197,5 +245,15 @@ export class CollectionsService {
         pending: obligationTotals.expected - obligationTotals.allocated,
       },
     };
+  }
+
+  private today() {
+    const value = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Sao_Paulo',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date());
+    return new Date(`${value}T00:00:00.000Z`);
   }
 }

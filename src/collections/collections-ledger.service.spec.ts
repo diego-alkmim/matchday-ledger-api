@@ -10,15 +10,19 @@ describe('CollectionsLedgerService', () => {
   const transactionUpdate = jest.fn();
   const obligationFindUnique = jest.fn();
   const obligationFindUniqueOrThrow = jest.fn();
+  const obligationFindMany = jest.fn();
   const obligationUpdate = jest.fn();
   const adjustmentCreate = jest.fn();
+  const adjustmentFindUnique = jest.fn();
+  const adjustmentUpdate = jest.fn();
   const allocationUpdateMany = jest.fn();
+  const allocationUpsert = jest.fn();
   const tx = {
     collectionPayment: { findUnique: paymentFindUnique, findMany: paymentFindMany, update: paymentUpdate },
     transaction: { update: transactionUpdate },
-    collectionObligation: { findUnique: obligationFindUnique, findUniqueOrThrow: obligationFindUniqueOrThrow, update: obligationUpdate },
-    collectionAdjustment: { create: adjustmentCreate },
-    collectionAllocation: { updateMany: allocationUpdateMany },
+    collectionObligation: { findUnique: obligationFindUnique, findUniqueOrThrow: obligationFindUniqueOrThrow, findMany: obligationFindMany, update: obligationUpdate },
+    collectionAdjustment: { create: adjustmentCreate, findUnique: adjustmentFindUnique, update: adjustmentUpdate },
+    collectionAllocation: { updateMany: allocationUpdateMany, upsert: allocationUpsert },
   };
   const prisma = { $transaction: jest.fn((callback) => callback(tx)) } as unknown as PrismaService;
   const service = new CollectionsLedgerService(prisma);
@@ -69,6 +73,49 @@ describe('CollectionsLedgerService', () => {
     });
     expect(obligationUpdate).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ expectedAmount: 0, allocatedAmount: 0, status: ObligationStatus.WAIVED }),
+    }));
+  });
+
+  it('allocates a payment only inside the selected exclusive group', async () => {
+    obligationFindMany.mockResolvedValue([]);
+
+    await (service as unknown as {
+      allocatePayment: (
+        transaction: typeof tx,
+        paymentId: string,
+        memberId: string,
+        group: string,
+        amount: number,
+      ) => Promise<void>;
+    }).allocatePayment(tx, 'payment-1', 'member-1', 'membership', 70);
+
+    expect(obligationFindMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        memberId: 'member-1',
+        plan: { exclusiveGroup: 'membership' },
+      }),
+    }));
+  });
+
+  it('reverses an adjustment and reopens the obligation', async () => {
+    adjustmentFindUnique.mockResolvedValue({
+      id: 'adjustment-1',
+      reversedAt: null,
+      obligation: { id: 'obligation-1', teamId: 'team-1' },
+    });
+    obligationFindUniqueOrThrow.mockResolvedValue({
+      id: 'obligation-1', originalAmount: new Prisma.Decimal(70), adjustments: [], allocations: [],
+    });
+    obligationUpdate.mockResolvedValue({ id: 'obligation-1', status: ObligationStatus.OPEN });
+
+    await service.reverseAdjustment('adjustment-1', 'Correção administrativa', user);
+
+    expect(adjustmentUpdate).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'adjustment-1' },
+      data: expect.objectContaining({ reversalReason: 'Correção administrativa' }),
+    }));
+    expect(obligationUpdate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ status: ObligationStatus.OPEN }),
     }));
   });
 });

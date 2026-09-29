@@ -35,10 +35,10 @@ describe('Tenant isolation for team-owned records', () => {
       where: { teamId: 'team-a' },
       orderBy: { name: 'asc' },
     });
-    expect(directorFindMany).toHaveBeenCalledWith({
-      where: { teamId: 'team-a', active: true },
+    expect(directorFindMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ teamId: 'team-a' }),
       orderBy: { name: 'asc' },
-    });
+    }));
   });
 
   it('ignores any external tenant context and stamps the active team on creation', async () => {

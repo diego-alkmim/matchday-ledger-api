@@ -1,5 +1,6 @@
 import { PrismaService } from '../prisma/prisma.service';
 import { ReportsService } from './reports.service';
+import { CollectionsDirectorReportService } from './collections-director-report.service';
 
 describe('ReportsService', () => {
   const findMany = jest.fn<Promise<unknown[]>, [unknown]>();
@@ -18,10 +19,13 @@ describe('ReportsService', () => {
     $queryRaw: queryRaw,
     $transaction: transaction,
   } as unknown as PrismaService;
-  const service = new ReportsService(prisma);
+  const collectionsReportBuild = jest.fn();
+  const collectionsReport = { build: collectionsReportBuild } as unknown as CollectionsDirectorReportService;
+  const service = new ReportsService(prisma, collectionsReport);
 
   beforeEach(() => {
     jest.clearAllMocks();
+    collectionsReportBuild.mockResolvedValue(null);
   });
 
   it('paginates analytical reports by game without splitting game transactions', async () => {

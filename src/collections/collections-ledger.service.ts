@@ -29,7 +29,7 @@ export class CollectionsLedgerService {
     const hasRole = member.roles.some((role) =>
       role.role === plan.audienceRole && role.startsAt <= paymentDate && (!role.endsAt || role.endsAt >= paymentDate),
     );
-    if (!hasRole || !plan.active || plan.effectiveFrom > paymentDate || (plan.inactiveAt && plan.inactiveAt < paymentDate)) {
+    if (!hasRole || plan.effectiveFrom > paymentDate || (plan.inactiveAt && plan.inactiveAt < paymentDate)) {
       throw new BadRequestException('O plano não está vigente para este participante na data do pagamento.');
     }
     const activeRoles = member.roles
@@ -38,7 +38,6 @@ export class CollectionsLedgerService {
     const higherPriorityPlan = await this.prisma.collectionPlan.findFirst({
       where: {
         teamId: user.teamId,
-        active: true,
         exclusiveGroup: plan.exclusiveGroup,
         audienceRole: { in: activeRoles },
         effectiveFrom: { lte: paymentDate },
@@ -55,7 +54,7 @@ export class CollectionsLedgerService {
       throw new BadRequestException('Outro plano tem prioridade para este participante na data informada.');
     }
 
-    return this.prisma.$transaction(async (tx) => {
+    return this.runSerializable(async (tx) => {
       const transaction = await tx.transaction.create({
         data: {
           teamId: user.teamId,
@@ -79,7 +78,14 @@ export class CollectionsLedgerService {
           amount: dto.amount,
         },
       });
-      await this.allocatePayment(tx, payment.id, member.id, dto.amount, dto.gameId);
+      await this.allocatePayment(
+        tx,
+        payment.id,
+        member.id,
+        plan.exclusiveGroup,
+        dto.amount,
+        dto.gameId,
+      );
       return tx.collectionPayment.findUnique({
         where: { id: payment.id },
         include: { transaction: true, allocations: { include: { obligation: true } } },
@@ -88,12 +94,13 @@ export class CollectionsLedgerService {
   }
 
   async applyAvailableCredits(teamId: string) {
-    return this.prisma.$transaction(async (tx) => {
+    return this.runSerializable(async (tx) => {
       const payments = await tx.collectionPayment.findMany({
         where: { teamId, status: CollectionPaymentStatus.POSTED },
         include: {
           allocations: { where: { releasedAt: null } },
           transaction: { select: { gameId: true } },
+          plan: { select: { exclusiveGroup: true } },
         },
         orderBy: { createdAt: 'asc' },
       });
@@ -105,6 +112,7 @@ export class CollectionsLedgerService {
             tx,
             payment.id,
             payment.memberId,
+            payment.plan.exclusiveGroup,
             remaining.toNumber(),
             payment.transaction.gameId ?? undefined,
           );
@@ -114,7 +122,7 @@ export class CollectionsLedgerService {
   }
 
   async reversePayment(id: string, reason: string, user: AccessTokenPayload) {
-    return this.prisma.$transaction(async (tx) => {
+    return this.runSerializable(async (tx) => {
       const payment = await tx.collectionPayment.findUnique({
         where: { id_teamId: { id, teamId: user.teamId } },
         include: { allocations: true },
@@ -143,7 +151,7 @@ export class CollectionsLedgerService {
     if ((dto.type === AdjustmentType.DISCOUNT || dto.type === AdjustmentType.SURCHARGE) && !dto.amount) {
       throw new BadRequestException('Informe o valor do ajuste.');
     }
-    const result = await this.prisma.$transaction(async (tx) => {
+    const result = await this.runSerializable(async (tx) => {
       const obligation = await tx.collectionObligation.findUnique({
         where: { id },
         select: { id: true, teamId: true, status: true, _count: { select: { allocations: { where: { releasedAt: null } } } } },
@@ -170,9 +178,44 @@ export class CollectionsLedgerService {
     return result;
   }
 
-  private async allocatePayment(tx: Prisma.TransactionClient, paymentId: string, memberId: string, amount: number, ownGameId?: string) {
+  async reverseAdjustment(id: string, reason: string, user: AccessTokenPayload) {
+    const result = await this.runSerializable(async (tx) => {
+      const adjustment = await tx.collectionAdjustment.findUnique({
+        where: { id },
+        include: { obligation: { select: { id: true, teamId: true } } },
+      });
+      if (!adjustment || adjustment.obligation.teamId !== user.teamId) {
+        throw new NotFoundException('Ajuste não encontrado.');
+      }
+      if (adjustment.reversedAt) throw new BadRequestException('Ajuste já estornado.');
+      await tx.collectionAdjustment.update({
+        where: { id },
+        data: {
+          reversedAt: new Date(),
+          reversedByUserId: user.sub,
+          reversalReason: reason,
+        },
+      });
+      return this.recalculateObligation(tx, adjustment.obligation.id);
+    });
+    await this.applyAvailableCredits(user.teamId);
+    return result;
+  }
+
+  private async allocatePayment(
+    tx: Prisma.TransactionClient,
+    paymentId: string,
+    memberId: string,
+    exclusiveGroup: string,
+    amount: number,
+    ownGameId?: string,
+  ) {
     const obligations = await tx.collectionObligation.findMany({
-      where: { memberId, status: { in: [ObligationStatus.OPEN, ObligationStatus.PARTIAL] } },
+      where: {
+        memberId,
+        plan: { exclusiveGroup },
+        status: { in: [ObligationStatus.OPEN, ObligationStatus.PARTIAL] },
+      },
       orderBy: [{ dueDate: 'asc' }, { createdAt: 'asc' }],
     });
     obligations.sort((a, b) => (a.gameId === ownGameId ? -1 : b.gameId === ownGameId ? 1 : a.dueDate.getTime() - b.dueDate.getTime()));
@@ -181,7 +224,11 @@ export class CollectionsLedgerService {
       const missing = obligation.expectedAmount.minus(obligation.allocatedAmount);
       if (missing.lte(0) || remaining.lte(0)) continue;
       const applied = Prisma.Decimal.min(missing, remaining);
-      await tx.collectionAllocation.create({ data: { paymentId, obligationId: obligation.id, amount: applied } });
+      await tx.collectionAllocation.upsert({
+        where: { paymentId_obligationId: { paymentId, obligationId: obligation.id } },
+        create: { paymentId, obligationId: obligation.id, amount: applied },
+        update: { amount: applied, releasedAt: null, releaseReason: null },
+      });
       remaining = remaining.minus(applied);
       await this.recalculateObligation(tx, obligation.id);
     }
@@ -190,7 +237,13 @@ export class CollectionsLedgerService {
   private async recalculateObligation(tx: Prisma.TransactionClient, id: string) {
     const obligation = await tx.collectionObligation.findUniqueOrThrow({
       where: { id },
-      include: { adjustments: true, allocations: { where: { releasedAt: null }, include: { payment: { select: { status: true } } } } },
+      include: {
+        adjustments: { where: { reversedAt: null } },
+        allocations: {
+          where: { releasedAt: null },
+          include: { payment: { select: { status: true } } },
+        },
+      },
     });
     const terminal = obligation.adjustments.find((item) => item.type === AdjustmentType.CANCELLATION || item.type === AdjustmentType.WAIVER);
     const adjustment = obligation.adjustments.reduce((sum, item) => {
@@ -212,6 +265,20 @@ export class CollectionsLedgerService {
       where: { id },
       data: { adjustmentAmount: adjustment, expectedAmount: terminal ? 0 : expected, allocatedAmount: terminal ? 0 : allocated, status },
     });
+  }
+
+  private async runSerializable<T>(operation: (tx: Prisma.TransactionClient) => Promise<T>) {
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        return await this.prisma.$transaction(operation, {
+          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        });
+      } catch (error) {
+        const retryable = typeof error === 'object' && error !== null && 'code' in error && error.code === 'P2034';
+        if (!retryable || attempt === 3) throw error;
+      }
+    }
+    throw new Error('Falha ao concluir a operação financeira.');
   }
 
   private async resolveDirectorId(tx: Prisma.TransactionClient, teamId: string, memberId: string) {

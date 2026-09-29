@@ -10,7 +10,30 @@ export class DirectorsService {
   constructor(private prisma: PrismaService) {}
 
   list(teamId: string) {
-    return this.prisma.director.findMany({ where: { teamId, active: true }, orderBy: { name: 'asc' } });
+    const currentDate = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(new Date());
+    const now = new Date(`${currentDate}T00:00:00.000Z`);
+    return this.prisma.director.findMany({
+      where: {
+        teamId,
+        OR: [
+          { memberId: null, active: true },
+          {
+            member: {
+              roles: {
+                some: {
+                  role: MemberRole.DIRECTOR,
+                  startsAt: { lte: now },
+                  OR: [{ endsAt: null }, { endsAt: { gte: now } }],
+                },
+              },
+            },
+          },
+        ],
+      },
+      orderBy: { name: 'asc' },
+    });
   }
 
   create(data: CreateDirectorDto, teamId: string) {
@@ -53,8 +76,7 @@ export class DirectorsService {
           data: {
             name: data.name,
             contact: data.contact,
-            active: data.active,
-            ...(data.active === true ? { inactiveAt: null } : data.active === false ? { inactiveAt: roleDate } : {}),
+            ...(data.active === true ? { active: true, inactiveAt: null } : {}),
           },
         });
         if (data.active === false) {
@@ -62,6 +84,15 @@ export class DirectorsService {
             where: { teamId, memberId: director.memberId, role: MemberRole.DIRECTOR, endsAt: null },
             data: { endsAt: roleDate },
           });
+          const remainingRoles = await tx.memberRoleAssignment.count({
+            where: { teamId, memberId: director.memberId, endsAt: null },
+          });
+          if (remainingRoles === 0) {
+            await tx.member.update({
+              where: { id_teamId: { id: director.memberId, teamId } },
+              data: { active: false, inactiveAt: roleDate },
+            });
+          }
         } else if (data.active === true) {
           const activeRole = await tx.memberRoleAssignment.findFirst({
             where: { teamId, memberId: director.memberId, role: MemberRole.DIRECTOR, endsAt: null },
@@ -84,8 +115,13 @@ export class DirectorsService {
     return this.prisma.$transaction(async (tx) => {
       const updated = await tx.director.update({ where: { id_teamId: { id, teamId } }, data: { active: false } });
       if (director.memberId) {
-        await tx.member.update({ where: { id_teamId: { id: director.memberId, teamId } }, data: { active: false, inactiveAt } });
         await tx.memberRoleAssignment.updateMany({ where: { teamId, memberId: director.memberId, role: MemberRole.DIRECTOR, endsAt: null }, data: { endsAt: inactiveAt } });
+        const remainingRoles = await tx.memberRoleAssignment.count({
+          where: { teamId, memberId: director.memberId, endsAt: null },
+        });
+        if (remainingRoles === 0) {
+          await tx.member.update({ where: { id_teamId: { id: director.memberId, teamId } }, data: { active: false, inactiveAt } });
+        }
       }
       return updated;
     });

@@ -53,19 +53,19 @@ export class CollectionsController {
   @Patch('members/:id/deactivate')
   @Roles(Role.ADMIN)
   deactivateMember(@Param('id', ParseCuidPipe) id: string, @Body() dto: EffectiveDateDto, @CurrentUser() user: AccessTokenPayload) {
-    return this.service.deactivateMember(user.teamId, id, dto.date);
+    return this.service.deactivateMember(user.teamId, id, dto.date, user.sub);
   }
 
   @Post('members/:id/roles')
   @Roles(Role.ADMIN)
   addMemberRole(@Param('id', ParseCuidPipe) id: string, @Body() dto: ChangeMemberRoleDto, @CurrentUser() user: AccessTokenPayload) {
-    return this.service.addMemberRole(user.teamId, id, dto.role, dto.date);
+    return this.service.addMemberRole(user.teamId, id, dto.role, dto.date, user.sub);
   }
 
   @Patch('members/:id/roles/end')
   @Roles(Role.ADMIN)
   endMemberRole(@Param('id', ParseCuidPipe) id: string, @Body() dto: ChangeMemberRoleDto, @CurrentUser() user: AccessTokenPayload) {
-    return this.service.endMemberRole(user.teamId, id, dto.role, dto.date);
+    return this.service.endMemberRole(user.teamId, id, dto.role, dto.date, user.sub);
   }
 
   @Get('plans')
@@ -76,7 +76,7 @@ export class CollectionsController {
   @Post('plans')
   @Roles(Role.ADMIN)
   createPlan(@Body() dto: CreatePlanDto, @CurrentUser() user: AccessTokenPayload) {
-    return this.service.createPlan(user.teamId, dto);
+    return this.service.createPlan(user.teamId, dto, user.sub);
   }
 
   @Post('plans/:id/rates')
@@ -88,7 +88,7 @@ export class CollectionsController {
   @Patch('plans/:id/deactivate')
   @Roles(Role.ADMIN)
   deactivatePlan(@Param('id', ParseCuidPipe) id: string, @Body() dto: EffectiveDateDto, @CurrentUser() user: AccessTokenPayload) {
-    return this.service.deactivatePlan(user.teamId, id, dto.date);
+    return this.service.deactivatePlan(user.teamId, id, dto.date, user.sub);
   }
 
   @Post('generate')
@@ -118,5 +118,12 @@ export class CollectionsController {
   @ApiOperation({ summary: 'Aplica desconto, acréscimo, isenção ou cancelamento' })
   adjustObligation(@Param('id', ParseCuidPipe) id: string, @Body() dto: AdjustObligationDto, @CurrentUser() user: AccessTokenPayload) {
     return this.ledger.adjustObligation(id, dto, user);
+  }
+
+  @Post('adjustments/:id/reverse')
+  @Roles(Role.ADMIN)
+  @ApiOperation({ summary: 'Estorna um ajuste e recalcula a obrigação' })
+  reverseAdjustment(@Param('id', ParseCuidPipe) id: string, @Body() dto: ReversePaymentDto, @CurrentUser() user: AccessTokenPayload) {
+    return this.ledger.reverseAdjustment(id, dto.reason, user);
   }
 }

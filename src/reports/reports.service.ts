@@ -8,6 +8,7 @@ import {
   groupPaymentsByDirector,
 } from './director-consolidation';
 import { AnalyticalByGameQueryDto } from './dto/analytical-by-game-query.dto';
+import { CollectionsDirectorReportService } from './collections-director-report.service';
 
 function buildContributionDateFilter(
   from: string | undefined,
@@ -31,7 +32,10 @@ function buildContributionDateFilter(
 
 @Injectable()
 export class ReportsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private collectionsDirectorReport: CollectionsDirectorReportService,
+  ) {}
 
   byGame(gameId: string, teamId: string) {
     return this.prisma.transaction.groupBy({
@@ -170,6 +174,9 @@ export class ReportsService {
     to: string | undefined,
     teamId: string,
   ) {
+    const collectionsReport = await this.collectionsDirectorReport.build(teamId, from, to);
+    if (collectionsReport) return collectionsReport;
+
     const team = await this.prisma.team.findUniqueOrThrow({
       where: { id: teamId },
       select: { contributionMode: true, monthlyContributionPerDirector: true },

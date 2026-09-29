@@ -315,6 +315,9 @@ model CollectionAdjustment {
   amount       Decimal              @default(0) @db.Decimal(10, 2)
   reason       String
   createdByUserId String
+  reversedAt      DateTime?
+  reversedByUserId String?
+  reversalReason  String?
   createdAt    DateTime             @default(now())
 
   @@index([obligationId, createdAt])

@@ -22,7 +22,7 @@ export class CollectionsGenerationService {
 
     const [plans, members, games] = await Promise.all([
       this.prisma.collectionPlan.findMany({
-        where: { teamId, active: true, effectiveFrom: { lte: to }, OR: [{ inactiveAt: null }, { inactiveAt: { gte: from } }] },
+        where: { teamId, effectiveFrom: { lte: to }, OR: [{ inactiveAt: null }, { inactiveAt: { gte: from } }] },
         include: { rates: { orderBy: { effectiveFrom: 'asc' } } },
         orderBy: { priority: 'desc' },
       }),
