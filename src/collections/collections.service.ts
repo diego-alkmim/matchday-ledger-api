@@ -14,7 +14,7 @@ import { refreshUntouchedObligationsForRate } from './collection-rate-recalculat
 import { generateObligationsThroughToday } from './collections-generation-range';
 import { collectionToday } from './collection-date';
 import { findRoleAssignmentForEnd } from './collection-role-assignment';
-
+import { assertBoundedDateRange } from '../common/validation/bounded-date-range';
 @Injectable()
 export class CollectionsService {
   constructor(
@@ -275,15 +275,13 @@ export class CollectionsService {
   }
 
   async summary(teamId: string, from?: string, to?: string) {
+    if ((from && !to) || (!from && to)) {
+      throw new BadRequestException('Informe as datas inicial e final do per\u00edodo.');
+    }
     const now = new Date();
     const periodFrom = from ?? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString().slice(0, 10);
     const periodTo = to ?? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
-    const periodStart = new Date(`${periodFrom}T00:00:00.000Z`);
-    const periodEnd = new Date(`${periodTo}T00:00:00.000Z`);
-    const periodDays = Math.floor((periodEnd.getTime() - periodStart.getTime()) / 86_400_000) + 1;
-    if (periodDays < 1 || periodDays > 366) {
-      throw new BadRequestException('O período deve ter no máximo 366 dias e a data inicial não pode superar a final.');
-    }
+    const { start: periodStart } = assertBoundedDateRange(periodFrom, periodTo);
     const where: Prisma.CollectionObligationWhereInput = {
       teamId,
       dueDate: { gte: periodStart, lte: new Date(`${periodTo}T23:59:59.999Z`) },
@@ -311,11 +309,14 @@ export class CollectionsService {
             date: { gte: new Date(periodFrom), lte: new Date(`${periodTo}T23:59:59.999Z`) },
           },
         },
-        include: {
+        select: {
+          id: true,
+          amount: true,
+          availableAmount: true,
+          createdAt: true,
           member: { select: { name: true } },
           plan: { select: { name: true } },
           transaction: { select: { date: true, paymentMethod: true } },
-          allocations: { where: { releasedAt: null }, select: { amount: true } },
         },
         orderBy: { createdAt: 'desc' },
       }),

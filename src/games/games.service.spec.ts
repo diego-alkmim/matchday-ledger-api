@@ -67,6 +67,30 @@ describe('GamesService tenant isolation', () => {
     });
   });
 
+  it('supports compact, status and date filters for lightweight selectors', async () => {
+    findMany.mockResolvedValue([]);
+
+    await service.list('team-1', {
+      status: GameStatus.ABERTO,
+      from: '2026-01-01',
+      to: '2026-12-31',
+      compact: true,
+    });
+
+    expect(findMany).toHaveBeenCalledWith({
+      where: {
+        teamId: 'team-1',
+        status: GameStatus.ABERTO,
+        date: {
+          gte: new Date('2026-01-01T00:00:00.000Z'),
+          lte: new Date('2026-12-31T23:59:59.999Z'),
+        },
+      },
+      select: { id: true, date: true, opponent: true, location: true, status: true },
+      orderBy: { date: 'desc' },
+    });
+  });
+
   it('blocks financial game changes after a transaction exists', async () => {
     findUnique.mockResolvedValue({
       id: 'game-1', date: new Date('2026-09-26'), expectedContributionPerDirector: 70,

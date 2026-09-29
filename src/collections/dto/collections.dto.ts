@@ -18,11 +18,14 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  Matches,
   Max,
   MaxLength,
   Min,
 } from 'class-validator';
 import { IsCuid } from '../../common/validation/cuid.validation';
+
+const DATE_ONLY_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 
 export class CreateMemberDto {
   @IsString() @IsNotEmpty() @MaxLength(120) name!: string;
@@ -50,8 +53,8 @@ export class AddPlanRateDto {
 }
 
 export class GenerateObligationsDto {
-  @IsDateString() from!: string;
-  @IsDateString() to!: string;
+  @IsDateString() @Matches(DATE_ONLY_REGEX) from!: string;
+  @IsDateString() @Matches(DATE_ONLY_REGEX) to!: string;
 }
 
 export class CreateCollectionPaymentDto {
@@ -80,8 +83,8 @@ export class AdjustObligationDto {
 }
 
 export class CollectionPeriodQueryDto {
-  @ApiPropertyOptional() @IsOptional() @IsDateString() from?: string;
-  @ApiPropertyOptional() @IsOptional() @IsDateString() to?: string;
+  @ApiPropertyOptional() @IsOptional() @IsDateString() @Matches(DATE_ONLY_REGEX) from?: string;
+  @ApiPropertyOptional() @IsOptional() @IsDateString() @Matches(DATE_ONLY_REGEX) to?: string;
 }
 
 export class EffectiveDateDto {

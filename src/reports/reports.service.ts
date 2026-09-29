@@ -9,6 +9,7 @@ import {
 import { AnalyticalByGameQueryDto } from './dto/analytical-by-game-query.dto';
 import { CollectionsDirectorReportService } from './collections-director-report.service';
 import { buildHistoricalDirectorEntries, historicalDirectorSelect } from './historical-directors';
+import { assertBoundedDateRange } from '../common/validation/bounded-date-range';
 
 function buildContributionDateFilter(
   from: string | undefined,
@@ -170,10 +171,11 @@ export class ReportsService {
   }
 
   async consolidatedByDirector(
-    from: string | undefined,
-    to: string | undefined,
+    from: string,
+    to: string,
     teamId: string,
   ) {
+    assertBoundedDateRange(from, to);
     const collectionsReport = await this.collectionsDirectorReport.build(teamId, from, to);
     if (collectionsReport) return collectionsReport;
 

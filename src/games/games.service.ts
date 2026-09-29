@@ -7,6 +7,7 @@ import { CollectionsLedgerService } from '../collections/collections-ledger.serv
 import { CollectionsReconciliationService } from '../collections/collections-reconciliation.service';
 import { CreateGameDto } from './dto/create-game.dto';
 import { UpdateGameDto } from './dto/update-game.dto';
+import { ListGamesQueryDto } from './dto/list-games-query.dto';
 
 @Injectable()
 export class GamesService {
@@ -17,12 +18,24 @@ export class GamesService {
     private ledger: CollectionsLedgerService,
   ) {}
 
-  async list(teamId: string) {
+  async list(teamId: string, query: ListGamesQueryDto = new ListGamesQueryDto()) {
+    const date = {
+      ...(query.from ? { gte: new Date(`${query.from}T00:00:00.000Z`) } : {}),
+      ...(query.to ? { lte: new Date(`${query.to}T23:59:59.999Z`) } : {}),
+    };
     const games = await this.prisma.game.findMany({
-      where: { teamId },
+      where: {
+        teamId,
+        ...(query.status ? { status: query.status } : {}),
+        ...(query.from || query.to ? { date } : {}),
+      },
+      ...(query.compact ? {
+        select: { id: true, date: true, opponent: true, location: true, status: true },
+      } : {}),
       orderBy: { date: 'desc' },
     });
-    return games.map((game) => this.normalize(game));
+    if (query.compact) return games;
+    return games.map((game) => this.normalize(game as Game));
   }
 
   async create(data: CreateGameDto, teamId: string) {

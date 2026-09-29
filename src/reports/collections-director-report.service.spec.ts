@@ -72,6 +72,23 @@ describe('CollectionsDirectorReportService', () => {
         expect.objectContaining({ allocations: expect.any(Object) }),
       ] }),
     }));
+    expect(paymentFindMany).toHaveBeenCalledWith(expect.objectContaining({
+      select: expect.objectContaining({
+        allocations: {
+          where: {
+            releasedAt: null,
+            obligation: {
+              planId: { in: ['plan-1'] },
+              dueDate: {
+                gte: new Date('2026-09-01T00:00:00.000Z'),
+                lte: new Date('2026-09-30T23:59:59.999Z'),
+              },
+            },
+          },
+          select: { amount: true },
+        },
+      }),
+    }));
   });
 
   it('merges legacy history before the first collection plan', async () => {

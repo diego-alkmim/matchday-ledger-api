@@ -38,6 +38,11 @@ describe('CollectionsService summary', () => {
       _sum: { availableAmount: true },
     });
     expect(paymentFindMany).toHaveBeenCalledTimes(1);
+    expect(paymentFindMany).toHaveBeenCalledWith(expect.objectContaining({
+      select: expect.objectContaining({ availableAmount: true }),
+    }));
+    const paymentQuery = paymentFindMany.mock.calls[0][0] as { select: Record<string, unknown> };
+    expect(paymentQuery.select).not.toHaveProperty('allocations');
   });
 
   it('rejects periods longer than one year before querying the database', async () => {
@@ -48,5 +53,13 @@ describe('CollectionsService summary', () => {
     expect(obligationFindMany).not.toHaveBeenCalled();
     expect(paymentFindMany).not.toHaveBeenCalled();
     expect(paymentAggregate).not.toHaveBeenCalled();
+  });
+
+  it('requires both period boundaries when one is provided', async () => {
+    await expect(service.summary('team-1', '2026-09-01')).rejects.toThrow(
+      'Informe as datas inicial e final do per\u00edodo.',
+    );
+
+    expect(obligationFindMany).not.toHaveBeenCalled();
   });
 });

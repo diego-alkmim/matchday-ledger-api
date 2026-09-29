@@ -32,7 +32,7 @@ export class ReportsController {
   @Get('analytical-by-game')
   @ApiOperation({ summary: 'Relatório analítico por jogo' })
   @ApiQuery({ name: 'from', required: false, example: '2026-02-01' })
-  @ApiQuery({ name: 'to', required: false, example: '2026-02-29' })
+  @ApiQuery({ name: 'to', required: false, example: '2026-02-28' })
   @ApiQuery({ name: 'gameId', required: false, example: 'cuid-do-jogo' })
   analyticalByGame(
     @Query() query: AnalyticalByGameQueryDto,
@@ -47,8 +47,8 @@ export class ReportsController {
     description:
       'Calcula automaticamente as obrigações pela regra do time: valor de cada jogo ou valor mensal configurado.',
   })
-  @ApiQuery({ name: 'from', required: false, example: '2026-02-01' })
-  @ApiQuery({ name: 'to', required: false, example: '2026-02-29' })
+  @ApiQuery({ name: 'from', required: true, example: '2026-02-01' })
+  @ApiQuery({ name: 'to', required: true, example: '2026-02-28' })
   consolidatedByDirector(
     @Query() query: ConsolidatedByDirectorQueryDto,
     @CurrentUser() user: AccessTokenPayload,

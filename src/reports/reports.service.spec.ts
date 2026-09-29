@@ -102,7 +102,7 @@ describe('ReportsService', () => {
     directorFindMany.mockResolvedValue([]);
     transactionFindMany.mockResolvedValue([]);
 
-    await service.consolidatedByDirector(undefined, undefined, 'team-2');
+    await service.consolidatedByDirector('2026-01-01', '2026-12-31', 'team-2');
 
     const gameArgs = findMany.mock.calls[0]?.[0] as { where: Record<string, unknown> };
     const directorArgs = directorFindMany.mock.calls[0]?.[0] as {
@@ -114,6 +114,15 @@ describe('ReportsService', () => {
     expect(gameArgs.where.teamId).toBe('team-2');
     expect(directorArgs.where.teamId).toBe('team-2');
     expect(paymentArgs.where.teamId).toBe('team-2');
+  });
+
+  it('rejects unbounded consolidated report periods before querying', async () => {
+    await expect(service.consolidatedByDirector(
+      '2025-01-01', '2026-01-02', 'team-1',
+    )).rejects.toThrow('O per\u00edodo deve ter no m\u00e1ximo 366 dias');
+
+    expect(collectionsReportBuild).not.toHaveBeenCalled();
+    expect(findMany).not.toHaveBeenCalled();
   });
 
   it('filters contribution obligations and payments by game date', async () => {

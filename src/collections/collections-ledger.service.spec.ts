@@ -201,6 +201,13 @@ describe('CollectionsLedgerService', () => {
     }));
     expect(transactionUpdate).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ reversalReason: 'Lançamento duplicado' }) }));
     expect(obligationUpdate).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ allocatedAmount: new Prisma.Decimal(0), status: ObligationStatus.OPEN }) }));
+    expect(paymentFindMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        teamId: 'team-1',
+        status: CollectionPaymentStatus.POSTED,
+        availableAmount: { gt: 0 },
+      }),
+    }));
   });
 
   it('releases allocations when an obligation is waived', async () => {

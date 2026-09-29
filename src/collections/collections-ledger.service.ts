@@ -157,6 +157,7 @@ export class CollectionsLedgerService {
       for (const obligationId of new Set(payment.allocations.map((item) => item.obligationId))) {
         await this.recalculateObligation(tx, obligationId);
       }
+      await this.applyAvailableCreditsInTransaction(tx, user.teamId);
       return { reversed: true };
     }, 'Falha ao estornar o pagamento.');
   }

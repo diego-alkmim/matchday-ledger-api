@@ -5,12 +5,18 @@ import { CreateDirectorDto } from './dto/create-director.dto';
 import { UpdateDirectorDto } from './dto/update-director.dto';
 import { domainErrors } from '../common/errors/domain-errors';
 import { CollectionsReconciliationService } from '../collections/collections-reconciliation.service';
+import { CollectionsGenerationService } from '../collections/collections-generation.service';
+import { CollectionsLedgerService } from '../collections/collections-ledger.service';
+import { generateObligationsThroughToday } from '../collections/collections-generation-range';
+import { collectionToday } from '../collections/collection-date';
 
 @Injectable()
 export class DirectorsService {
   constructor(
     private prisma: PrismaService,
     private reconciliation: CollectionsReconciliationService,
+    private generation: CollectionsGenerationService,
+    private ledger: CollectionsLedgerService,
   ) {}
 
   list(teamId: string) {
@@ -42,7 +48,7 @@ export class DirectorsService {
 
   async create(data: CreateDirectorDto, teamId: string, actorId: string) {
     const director = await this.reconciliation.runSerializable(async (tx) => {
-      const activeFrom = new Date();
+      const activeFrom = collectionToday();
       const existingMember = await tx.member.findUnique({
         where: { teamId_name: { teamId, name: data.name } },
         include: { roles: true },
@@ -57,7 +63,7 @@ export class DirectorsService {
           data: { active: data.active ?? true, inactiveAt: null, contact: data.contact ?? member.contact },
         });
       }
-      if (!member.roles.some((role) =>
+      if (data.active !== false && !member.roles.some((role) =>
         role.role === MemberRole.DIRECTOR && (!role.endsAt || role.endsAt >= activeFrom),
       )) {
         await tx.memberRoleAssignment.create({
@@ -66,20 +72,25 @@ export class DirectorsService {
       }
       const director = await tx.director.create({ data: { ...data, teamId, memberId: member.id } });
       await this.reconciliation.reconcileInTransaction(tx, teamId, actorId, member.id);
+      if (data.active !== false) {
+        await generateObligationsThroughToday(
+          this.generation, this.ledger, tx, teamId, activeFrom, collectionToday(),
+        );
+      }
       return director;
     });
     return director;
   }
 
   async update(id: string, data: UpdateDirectorDto, teamId: string, actorId: string) {
-    await this.assertExists(id, teamId);
+    const currentDirector = await this.assertExists(id, teamId);
     const director = await this.reconciliation.runSerializable(async (tx) => {
       const director = await tx.director.update({
         where: { id_teamId: { id, teamId } },
         data: data as Prisma.DirectorUpdateInput,
       });
       if (director.memberId) {
-        const roleDate = new Date();
+        const roleDate = collectionToday();
         await tx.member.update({
           where: { id_teamId: { id: director.memberId, teamId } },
           data: {
@@ -124,6 +135,11 @@ export class DirectorsService {
       }
       if (data.active !== undefined && director.memberId) {
         await this.reconciliation.reconcileInTransaction(tx, teamId, actorId, director.memberId);
+        if (data.active && !currentDirector.active) {
+          await generateObligationsThroughToday(
+            this.generation, this.ledger, tx, teamId, collectionToday(), collectionToday(),
+          );
+        }
       }
       return director;
     });
@@ -163,9 +179,10 @@ export class DirectorsService {
   private async assertExists(id: string, teamId: string) {
     const director = await this.prisma.director.findUnique({
       where: { id_teamId: { id, teamId } },
-      select: { id: true },
+      select: { id: true, active: true },
     });
     if (!director) throw new NotFoundException(domainErrors.directorNotFound);
+    return director;
   }
 
   private async deactivateDirectorRole(

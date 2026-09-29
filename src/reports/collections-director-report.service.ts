@@ -28,7 +28,6 @@ type ConsolidatedReport = {
   obligations: ContributionObligation[];
   directors: DirectorReportEntry[];
 };
-
 @Injectable()
 export class CollectionsDirectorReportService {
   constructor(private prisma: PrismaService) {}
@@ -94,8 +93,11 @@ export class CollectionsDirectorReportService {
           availableAmount: true,
           transaction: { select: { date: true } },
           allocations: {
-            where: { releasedAt: null },
-            select: { amount: true, obligation: { select: { planId: true, dueDate: true } } },
+            where: {
+              releasedAt: null,
+              obligation: { planId: { in: planIds }, dueDate: dateFilter },
+            },
+            select: { amount: true },
           },
         },
       }),
@@ -104,7 +106,6 @@ export class CollectionsDirectorReportService {
     const paidByMember = new Map<string, number>();
     for (const payment of payments) {
       const allocatedToReport = payment.allocations
-        .filter((allocation) => planIdSet.has(allocation.obligation.planId) && isInCollectionRange(allocation.obligation.dueDate, from, to))
         .reduce((sum, allocation) => sum + Number(allocation.amount), 0);
       const availableDirectorCredit = planIdSet.has(payment.planId) && isInCollectionRange(payment.transaction.date, from, to)
         ? Number(payment.availableAmount)

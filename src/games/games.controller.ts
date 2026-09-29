@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Post, Put, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiBody, ApiTags } from '@nestjs/swagger';
 import { Role } from '@prisma/client';
 import { AccessTokenPayload } from '../auth/interfaces/access-token-payload.interface';
@@ -8,6 +8,7 @@ import { RolesGuard } from '../common/guards/roles.guard';
 import { ParseCuidPipe } from '../common/pipes/parse-cuid.pipe';
 import { CreateGameDto } from './dto/create-game.dto';
 import { UpdateGameDto } from './dto/update-game.dto';
+import { ListGamesQueryDto } from './dto/list-games-query.dto';
 import { GamesService } from './games.service';
 
 @Controller('games')
@@ -18,8 +19,8 @@ export class GamesController {
   constructor(private service: GamesService) {}
 
   @Get()
-  list(@CurrentUser() user: AccessTokenPayload) {
-    return this.service.list(user.teamId);
+  list(@Query() query: ListGamesQueryDto, @CurrentUser() user: AccessTokenPayload) {
+    return this.service.list(user.teamId, query);
   }
 
   @Roles(Role.ADMIN)
