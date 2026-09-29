@@ -38,6 +38,42 @@ enum ContributionMode {
   MONTHLY
 }
 
+enum MemberRole {
+  DIRECTOR
+  PLAYER
+}
+
+enum CollectionFrequency {
+  PER_GAME
+  MONTHLY
+}
+
+enum ProrationPolicy {
+  FULL_AMOUNT
+  DUE_DATE_CUTOFF
+  NEXT_MONTH
+}
+
+enum ObligationStatus {
+  OPEN
+  PARTIAL
+  PAID
+  WAIVED
+  CANCELLED
+}
+
+enum AdjustmentType {
+  DISCOUNT
+  SURCHARGE
+  WAIVER
+  CANCELLATION
+}
+
+enum CollectionPaymentStatus {
+  POSTED
+  REVERSED
+}
+
 model User {
   id           String           @id @default(cuid())
   email        String           @unique
@@ -53,6 +89,8 @@ model Team {
   active                         Boolean          @default(true)
   contributionMode               ContributionMode @default(PER_GAME)
   monthlyContributionPerDirector Decimal          @default(70) @db.Decimal(10, 2)
+  collectionsGeneratedThrough    DateTime?        @db.Date
+  collectionsMaintainedOn        DateTime?        @db.Date
   createdAt                      DateTime         @default(now())
   updatedAt                      DateTime         @updatedAt
   memberships                    TeamMembership[]
@@ -60,6 +98,10 @@ model Team {
   games                          Game[]
   categories                     Category[]
   transactions                   Transaction[]
+  members                        Member[]
+  collectionPlans                CollectionPlan[]
+  collectionObligations          CollectionObligation[]
+  collectionPayments             CollectionPayment[]
 }
 
 model TeamMembership {
@@ -91,10 +133,13 @@ model Director {
   active       Boolean          @default(true)
   memberships  TeamMembership[]
   transactions Transaction[]
+  member       Member?          @relation(fields: [memberId, teamId], references: [id, teamId], onDelete: Restrict)
+  memberId     String?
 
   @@unique([teamId, name])
   @@unique([id, teamId])
   @@index([teamId, active])
+  @@unique([memberId, teamId])
 }
 
 model Game {
@@ -108,6 +153,7 @@ model Game {
   expectedContributionPerDirector Decimal       @db.Decimal(10, 2)
   createdAt                       DateTime      @default(now())
   transactions                    Transaction[]
+  collectionObligations           CollectionObligation[]
 
   @@unique([id, teamId])
   @@index([teamId, date])
@@ -122,6 +168,7 @@ model Category {
   type         CategoryType  @default(ENTRADA)
   active       Boolean       @default(true)
   transactions Transaction[]
+  collectionPlans CollectionPlan[]
 
   @@unique([teamId, name])
   @@unique([id, teamId])
@@ -137,8 +184,8 @@ model Transaction {
   date                DateTime
   paymentMethod       PaymentMethod
   notes               String?
-  game                Game            @relation(fields: [gameId, teamId], references: [id, teamId])
-  gameId              String
+  game                Game?           @relation(fields: [gameId, teamId], references: [id, teamId])
+  gameId              String?
   category            Category        @relation(fields: [categoryId, teamId], references: [id, teamId])
   categoryId          String
   director            Director?       @relation(fields: [directorId, teamId], references: [id, teamId], onDelete: Restrict)
@@ -147,12 +194,178 @@ model Transaction {
   createdByUserId     String
   createdAt           DateTime        @default(now())
   updatedAt           DateTime        @updatedAt
+  reversedAt          DateTime?
+  reversedByUserId    String?
+  reversalReason      String?
+  collectionPayment   CollectionPayment?
 
   @@unique([id, teamId])
   @@index([teamId, createdAt])
+  @@index([teamId, date])
   @@index([teamId, gameId])
   @@index([teamId, categoryId])
   @@index([teamId, directorId])
+}
+
+model Member {
+  id          String   @id @default(cuid())
+  team        Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  teamId      String
+  name        String
+  contact     String?
+  activeFrom  DateTime @db.Date
+  inactiveAt  DateTime? @db.Date
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  director    Director?
+  roles       MemberRoleAssignment[]
+  obligations CollectionObligation[]
+  payments    CollectionPayment[]
+
+  @@unique([id, teamId])
+  @@unique([teamId, name])
+  @@index([teamId, active])
+}
+
+model MemberRoleAssignment {
+  id        String     @id @default(cuid())
+  teamId    String
+  member    Member     @relation(fields: [memberId, teamId], references: [id, teamId], onDelete: Cascade)
+  memberId  String
+  role      MemberRole
+  startsAt  DateTime   @db.Date
+  endsAt    DateTime?  @db.Date
+  createdAt DateTime   @default(now())
+
+  @@index([teamId, role, startsAt])
+  @@index([memberId, startsAt])
+}
+
+model CollectionPlan {
+  id              String              @id @default(cuid())
+  team            Team                @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  teamId          String
+  name            String
+  audienceRole    MemberRole
+  frequency       CollectionFrequency
+  category        Category            @relation(fields: [categoryId, teamId], references: [id, teamId], onDelete: Restrict)
+  categoryId      String
+  priority        Int                 @default(0)
+  exclusiveGroup  String              @default("membership")
+  dueDay          Int?
+  prorationPolicy ProrationPolicy     @default(DUE_DATE_CUTOFF)
+  effectiveFrom   DateTime            @db.Date
+  inactiveAt      DateTime?           @db.Date
+  active          Boolean             @default(true)
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+  rates           CollectionPlanRate[]
+  obligations     CollectionObligation[]
+  payments        CollectionPayment[]
+
+  @@unique([id, teamId])
+  @@unique([teamId, name])
+  @@index([teamId, active, priority])
+}
+
+model CollectionPlanRate {
+  id            String         @id @default(cuid())
+  plan          CollectionPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  planId        String
+  amount        Decimal        @db.Decimal(10, 2)
+  effectiveFrom DateTime       @db.Date
+  createdAt     DateTime       @default(now())
+
+  @@unique([planId, effectiveFrom])
+  @@index([planId, effectiveFrom])
+}
+
+model CollectionObligation {
+  id               String           @id @default(cuid())
+  team              Team             @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  teamId            String
+  plan              CollectionPlan   @relation(fields: [planId, teamId], references: [id, teamId], onDelete: Restrict)
+  planId            String
+  member            Member           @relation(fields: [memberId, teamId], references: [id, teamId], onDelete: Restrict)
+  memberId          String
+  game              Game?            @relation(fields: [gameId, teamId], references: [id, teamId], onDelete: Restrict)
+  gameId            String?
+  competence        DateTime?         @db.Date
+  dueDate            DateTime         @db.Date
+  roleSnapshot       MemberRole
+  originalAmount     Decimal          @db.Decimal(10, 2)
+  adjustmentAmount   Decimal          @default(0) @db.Decimal(10, 2)
+  expectedAmount     Decimal          @db.Decimal(10, 2)
+  allocatedAmount    Decimal          @default(0) @db.Decimal(10, 2)
+  status             ObligationStatus @default(OPEN)
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+  adjustments        CollectionAdjustment[]
+  allocations        CollectionAllocation[]
+
+  @@unique([planId, memberId, competence])
+  @@unique([planId, memberId, gameId])
+  @@index([teamId, status, dueDate])
+  @@index([teamId, memberId])
+}
+
+model CollectionAdjustment {
+  id           String               @id @default(cuid())
+  obligation   CollectionObligation @relation(fields: [obligationId], references: [id], onDelete: Restrict)
+  obligationId String
+  type         AdjustmentType
+  amount       Decimal              @default(0) @db.Decimal(10, 2)
+  reason       String
+  createdByUserId String
+  reversedAt      DateTime?
+  reversedByUserId String?
+  reversalReason  String?
+  createdAt    DateTime             @default(now())
+
+  @@index([obligationId, createdAt])
+}
+
+model CollectionPayment {
+  id               String                  @id @default(cuid())
+  team             Team                    @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  teamId           String
+  member           Member                  @relation(fields: [memberId, teamId], references: [id, teamId], onDelete: Restrict)
+  memberId         String
+  plan             CollectionPlan          @relation(fields: [planId, teamId], references: [id, teamId], onDelete: Restrict)
+  planId           String
+  transaction      Transaction             @relation(fields: [transactionId, teamId], references: [id, teamId], onDelete: Restrict)
+  transactionId    String                  @unique
+  amount           Decimal                 @db.Decimal(10, 2)
+  availableAmount  Decimal                 @default(0) @db.Decimal(10, 2)
+  idempotencyKey   String
+  status           CollectionPaymentStatus @default(POSTED)
+  reversedAt       DateTime?
+  reversedByUserId String?
+  reversalReason   String?
+  createdAt        DateTime                @default(now())
+  allocations      CollectionAllocation[]
+
+  @@unique([id, teamId])
+  @@unique([transactionId, teamId])
+  @@unique([teamId, idempotencyKey])
+  @@index([teamId, memberId, status])
+  @@index([teamId, status, availableAmount, createdAt])
+}
+
+model CollectionAllocation {
+  id           String               @id @default(cuid())
+  payment      CollectionPayment    @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  paymentId    String
+  obligation   CollectionObligation @relation(fields: [obligationId], references: [id], onDelete: Restrict)
+  obligationId String
+  amount       Decimal              @db.Decimal(10, 2)
+  releasedAt   DateTime?
+  releaseReason String?
+  createdAt    DateTime             @default(now())
+
+  @@unique([paymentId, obligationId])
+  @@index([obligationId])
 }
 
 model RefreshToken {

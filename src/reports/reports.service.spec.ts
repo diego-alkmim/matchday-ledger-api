@@ -1,5 +1,6 @@
 import { PrismaService } from '../prisma/prisma.service';
 import { ReportsService } from './reports.service';
+import { CollectionsDirectorReportService } from './collections-director-report.service';
 
 describe('ReportsService', () => {
   const findMany = jest.fn<Promise<unknown[]>, [unknown]>();
@@ -18,10 +19,13 @@ describe('ReportsService', () => {
     $queryRaw: queryRaw,
     $transaction: transaction,
   } as unknown as PrismaService;
-  const service = new ReportsService(prisma);
+  const collectionsReportBuild = jest.fn();
+  const collectionsReport = { build: collectionsReportBuild } as unknown as CollectionsDirectorReportService;
+  const service = new ReportsService(prisma, collectionsReport);
 
   beforeEach(() => {
     jest.clearAllMocks();
+    collectionsReportBuild.mockResolvedValue(null);
   });
 
   it('paginates analytical reports by game without splitting game transactions', async () => {
@@ -75,6 +79,19 @@ describe('ReportsService', () => {
     expect(count).not.toHaveBeenCalled();
   });
 
+  it('uses the team timezone for analytical game date boundaries', async () => {
+    findMany.mockResolvedValueOnce([]);
+
+    await service.analyticalByGame({ from: '2026-09-01', to: '2026-09-30' }, 'team-1');
+
+    const args = findMany.mock.calls[0]?.[0] as unknown as {
+      where: { transactions: { some: { createdAt: { gte: Date; lte: Date } } } };
+    };
+    const createdAt = args.where.transactions.some.createdAt;
+    expect(createdAt.gte.toISOString()).toBe('2026-09-01T03:00:00.000Z');
+    expect(createdAt.lte.toISOString()).toBe('2026-10-01T02:59:59.999Z');
+  });
+
   it('scopes every summary report to the active team', async () => {
     groupBy.mockResolvedValue([]);
     queryRaw.mockResolvedValue([]);
@@ -84,7 +101,7 @@ describe('ReportsService', () => {
     await service.byCategory('2026-01-01', '2026-12-31', 'team-1');
 
     const groupArgs = groupBy.mock.calls[0]?.[0] as { where: Record<string, unknown> };
-    expect(groupArgs.where).toEqual({ gameId: 'game-1', teamId: 'team-1' });
+    expect(groupArgs.where).toEqual({ gameId: 'game-1', teamId: 'team-1', reversedAt: null });
     expect(queryRaw.mock.calls[0]).toContain('team-1');
     expect(queryRaw.mock.calls[1]).toContain('team-1');
   });
@@ -98,7 +115,7 @@ describe('ReportsService', () => {
     directorFindMany.mockResolvedValue([]);
     transactionFindMany.mockResolvedValue([]);
 
-    await service.consolidatedByDirector(undefined, undefined, 'team-2');
+    await service.consolidatedByDirector('2026-01-01', '2026-12-31', 'team-2');
 
     const gameArgs = findMany.mock.calls[0]?.[0] as { where: Record<string, unknown> };
     const directorArgs = directorFindMany.mock.calls[0]?.[0] as {
@@ -110,6 +127,15 @@ describe('ReportsService', () => {
     expect(gameArgs.where.teamId).toBe('team-2');
     expect(directorArgs.where.teamId).toBe('team-2');
     expect(paymentArgs.where.teamId).toBe('team-2');
+  });
+
+  it('rejects unbounded consolidated report periods before querying', async () => {
+    await expect(service.consolidatedByDirector(
+      '2025-01-01', '2026-01-02', 'team-1',
+    )).rejects.toThrow('O per\u00edodo deve ter no m\u00e1ximo 366 dias');
+
+    expect(collectionsReportBuild).not.toHaveBeenCalled();
+    expect(findMany).not.toHaveBeenCalled();
   });
 
   it('filters contribution obligations and payments by game date', async () => {

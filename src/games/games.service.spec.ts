@@ -1,14 +1,29 @@
 import { GameStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { GamesService } from './games.service';
+import { CollectionsGenerationService } from '../collections/collections-generation.service';
+import { CollectionsLedgerService } from '../collections/collections-ledger.service';
+import { CollectionsReconciliationService } from '../collections/collections-reconciliation.service';
 
 describe('GamesService tenant isolation', () => {
   const findMany = jest.fn<Promise<unknown[]>, [unknown]>();
   const findUnique = jest.fn<Promise<unknown>, [unknown]>();
   const create = jest.fn<Promise<unknown>, [unknown]>();
   const update = jest.fn<Promise<unknown>, [unknown]>();
-  const prisma = { game: { findMany, findUnique, create, update } } as unknown as PrismaService;
-  const service = new GamesService(prisma);
+  const transactionCount = jest.fn();
+  const obligationFindMany = jest.fn();
+  const obligationDeleteMany = jest.fn();
+  const prisma = {
+    game: { findMany, findUnique, create, update },
+    transaction: { count: transactionCount },
+    collectionObligation: { findMany: obligationFindMany, deleteMany: obligationDeleteMany },
+  } as unknown as PrismaService;
+  const reconciliation = {
+    runSerializable: jest.fn((operation: (client: PrismaService) => Promise<unknown>) => operation(prisma)),
+  } as unknown as CollectionsReconciliationService;
+  const generation = { generateInTransaction: jest.fn() } as unknown as CollectionsGenerationService;
+  const ledger = { applyAvailableCreditsInTransaction: jest.fn() } as unknown as CollectionsLedgerService;
+  const service = new GamesService(prisma, reconciliation, generation, ledger);
 
   beforeEach(() => jest.clearAllMocks());
 
@@ -22,7 +37,7 @@ describe('GamesService tenant isolation', () => {
   });
 
   it('stamps the active team when creating a game', async () => {
-    create.mockResolvedValue({ id: 'game-1' });
+    create.mockResolvedValue({ id: 'game-1', date: new Date('2026-09-26T12:00:00.000Z') });
     await service.create(
       {
         date: '2026-09-26T12:00:00.000Z',
@@ -34,15 +49,114 @@ describe('GamesService tenant isolation', () => {
     expect(create).toHaveBeenCalled();
     const createCall = create.mock.calls[0]?.[0] as unknown as { data: { teamId: string } };
     expect(createCall.data.teamId).toBe('team-1');
+    expect(generation.generateInTransaction).toHaveBeenCalledWith(
+      prisma,
+      'team-1',
+      '2026-09-26',
+      '2026-09-26',
+    );
   });
 
   it('uses a composite key when updating a game', async () => {
-    findUnique.mockResolvedValue({ id: 'game-1' });
-    update.mockResolvedValue({ id: 'game-1' });
+    findUnique.mockResolvedValue({ id: 'game-1', date: new Date('2026-09-26') });
+    update.mockResolvedValue({ id: 'game-1', date: new Date('2026-09-26') });
     await service.update('game-1', { opponent: 'Rival' }, 'team-1');
     expect(update).toHaveBeenCalledWith({
       where: { id_teamId: { id: 'game-1', teamId: 'team-1' } },
       data: { opponent: 'Rival' },
     });
+  });
+
+  it('supports compact, status and date filters for lightweight selectors', async () => {
+    findMany.mockResolvedValue([]);
+
+    await service.list('team-1', {
+      status: GameStatus.ABERTO,
+      from: '2026-01-01',
+      to: '2026-12-31',
+      activityFrom: '2026-09-01',
+      activityTo: '2026-09-30',
+      compact: true,
+    });
+
+    expect(findMany).toHaveBeenCalledWith({
+      where: {
+        teamId: 'team-1',
+        status: GameStatus.ABERTO,
+        date: {
+          gte: new Date('2026-01-01T03:00:00.000Z'),
+          lte: new Date('2027-01-01T02:59:59.999Z'),
+        },
+        transactions: {
+          some: {
+            teamId: 'team-1',
+            reversedAt: null,
+            createdAt: {
+              gte: new Date('2026-09-01T03:00:00.000Z'),
+              lte: new Date('2026-10-01T02:59:59.999Z'),
+            },
+          },
+        },
+      },
+      select: { id: true, date: true, opponent: true, location: true, status: true },
+      orderBy: { date: 'desc' },
+    });
+  });
+
+  it('rejects partial activity periods before querying the database', async () => {
+    await expect(service.list('team-1', {
+      activityFrom: '2026-09-01',
+      compact: false,
+    })).rejects.toThrow('Informe as datas inicial e final do per\u00edodo.');
+
+    expect(findMany).not.toHaveBeenCalled();
+  });
+
+  it('rejects oversized activity periods before querying the database', async () => {
+    await expect(service.list('team-1', {
+      activityFrom: '2025-01-01',
+      activityTo: '2026-01-02',
+      compact: false,
+    })).rejects.toThrow(
+      'O per\u00edodo deve ter no m\u00e1ximo 366 dias e a data inicial n\u00e3o pode superar a final.',
+    );
+
+    expect(findMany).not.toHaveBeenCalled();
+  });
+
+  it('blocks financial game changes after a transaction exists', async () => {
+    findUnique.mockResolvedValue({
+      id: 'game-1', date: new Date('2026-09-26'), expectedContributionPerDirector: 70,
+    });
+    transactionCount.mockResolvedValue(1);
+    obligationFindMany.mockResolvedValue([]);
+
+    await expect(service.update(
+      'game-1', { expectedContributionPerDirector: 90 }, 'team-1',
+    )).rejects.toThrow('Não é possível alterar data ou valor de um jogo com movimentação financeira.');
+
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('allows non-financial edits when unchanged financial fields are resent', async () => {
+    const current = {
+      id: 'game-1', date: new Date('2026-09-26T12:00:00.000Z'),
+      expectedContributionPerDirector: 70,
+    };
+    findUnique.mockResolvedValue(current);
+    update.mockResolvedValue({ ...current, opponent: 'Novo rival', status: GameStatus.FECHADO });
+
+    await service.update('game-1', {
+      date: '2026-09-26T12:00:00.000Z',
+      expectedContributionPerDirector: 70,
+      opponent: 'Novo rival',
+      status: GameStatus.FECHADO,
+    }, 'team-1');
+
+    expect(transactionCount).not.toHaveBeenCalled();
+    expect(obligationDeleteMany).not.toHaveBeenCalled();
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ opponent: 'Novo rival', status: GameStatus.FECHADO }),
+    }));
   });
 });

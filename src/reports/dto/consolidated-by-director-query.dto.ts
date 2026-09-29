@@ -1,3 +1,3 @@
-import { DateRangeQueryDto } from './date-range-query.dto';
+import { DateRangeRequiredQueryDto } from './date-range-required-query.dto';
 
-export class ConsolidatedByDirectorQueryDto extends DateRangeQueryDto {}
+export class ConsolidatedByDirectorQueryDto extends DateRangeRequiredQueryDto {}

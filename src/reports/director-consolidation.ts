@@ -208,7 +208,8 @@ export function buildDirectorConsolidation(
     }
   }
 
-  const missingObligations = obligationStatuses.filter((status) => status.missingAmount > 0);
+  const publicStatuses = obligationStatuses.map(({ ownExcess: _ownExcess, ...status }) => status);
+  const missingObligations = publicStatuses.filter((status) => status.missingAmount > 0);
   const settledObligationsCount = obligationStatuses.filter((status) => status.settled).length;
   const delta = roundMoney(totalPaid - expectedTotal);
 
@@ -222,7 +223,7 @@ export function buildDirectorConsolidation(
       delta,
     },
     status: missingObligations.length ? 'PENDENTE' : delta > 0 ? 'ACIMA' : 'EM_DIA',
-    obligationStatuses: obligationStatuses.map(({ ownExcess: _ownExcess, ...status }) => status),
+    obligationStatuses: publicStatuses,
     missingObligations,
     payments,
   };

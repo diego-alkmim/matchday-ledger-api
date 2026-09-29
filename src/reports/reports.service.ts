@@ -4,10 +4,12 @@ import { buildPaginationMeta } from '../common/dto/pagination.dto';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   buildContributionObligations,
-  buildDirectorConsolidation,
   groupPaymentsByDirector,
 } from './director-consolidation';
 import { AnalyticalByGameQueryDto } from './dto/analytical-by-game-query.dto';
+import { CollectionsDirectorReportService } from './collections-director-report.service';
+import { buildHistoricalDirectorEntries, historicalDirectorSelect } from './historical-directors';
+import { assertBoundedDateRange } from '../common/validation/bounded-date-range';
 
 function buildContributionDateFilter(
   from: string | undefined,
@@ -31,12 +33,15 @@ function buildContributionDateFilter(
 
 @Injectable()
 export class ReportsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private collectionsDirectorReport: CollectionsDirectorReportService,
+  ) {}
 
   byGame(gameId: string, teamId: string) {
     return this.prisma.transaction.groupBy({
       by: ['type'],
-      where: { gameId, teamId },
+      where: { gameId, teamId, reversedAt: null },
       _sum: { amount: true },
     });
   }
@@ -50,6 +55,7 @@ export class ReportsService {
         SUM(CASE WHEN type='SAIDA' THEN amount ELSE 0 END) as saidas
       FROM "Transaction"
       WHERE "teamId" = ${teamId}
+        AND "reversedAt" IS NULL
         AND "createdAt" >= ${from}::date
         AND "createdAt" < (${to}::date + INTERVAL '1 day')
       GROUP BY 1,2
@@ -63,6 +69,7 @@ export class ReportsService {
       FROM "Transaction" t
       JOIN "Category" c ON c.id = t."categoryId"
       WHERE t."teamId" = ${teamId}
+        AND t."reversedAt" IS NULL
         AND t.date >= ${from}::date
         AND t.date < (${to}::date + INTERVAL '1 day')
       GROUP BY c.name;
@@ -75,14 +82,15 @@ export class ReportsService {
     const pageSize = query.pageSize ?? 20;
     const transactionWhere: Prisma.TransactionWhereInput = {
       teamId,
+      reversedAt: null,
       ...(query.from || query.to
         ? {
             createdAt: {
               ...(query.from
-                ? { gte: new Date(`${query.from}T00:00:00.000Z`) }
+                ? { gte: new Date(`${query.from}T00:00:00.000-03:00`) }
                 : {}),
               ...(query.to
-                ? { lte: new Date(`${query.to}T23:59:59.999Z`) }
+                ? { lte: new Date(`${query.to}T23:59:59.999-03:00`) }
                 : {}),
             },
           }
@@ -163,10 +171,14 @@ export class ReportsService {
   }
 
   async consolidatedByDirector(
-    from: string | undefined,
-    to: string | undefined,
+    from: string,
+    to: string,
     teamId: string,
   ) {
+    assertBoundedDateRange(from, to);
+    const collectionsReport = await this.collectionsDirectorReport.build(teamId, from, to);
+    if (collectionsReport) return collectionsReport;
+
     const team = await this.prisma.team.findUniqueOrThrow({
       where: { id: teamId },
       select: { contributionMode: true, monthlyContributionPerDirector: true },
@@ -184,11 +196,17 @@ export class ReportsService {
           expectedContributionPerDirector: true,
         },
       }),
-      this.prisma.director.findMany({ where: { teamId, active: true }, orderBy: { name: 'asc' }, select: { id: true, name: true, contact: true } }),
+      this.prisma.director.findMany({
+        where: { teamId },
+        orderBy: { name: 'asc' },
+        select: historicalDirectorSelect,
+      }),
       this.prisma.transaction.findMany({
         where: {
           teamId,
+          reversedAt: null,
           type: 'ENTRADA',
+          gameId: { not: null },
           category: { name: 'Diretoria' },
           ...(gameDateFilter ? { game: { date: gameDateFilter } } : {}),
         },
@@ -203,30 +221,31 @@ export class ReportsService {
       monthlyContributionPerDirector,
     );
     const paymentsByDirector = groupPaymentsByDirector(directors, paymentsRaw);
-    const expectedTotalPerDirector =
-      Math.round(
-        obligations.reduce((sum, obligation) => sum + obligation.expectedAmount, 0) * 100,
-      ) / 100;
+    const directorEntries = buildHistoricalDirectorEntries(
+      directors,
+      obligations,
+      paymentsByDirector,
+      team.contributionMode,
+    );
+    const expectedTotalPerDirector = directorEntries.length
+      ? Math.round(
+        (directorEntries.reduce((sum, director) => sum + director.totals.expectedTotal, 0) /
+          directorEntries.length) * 100,
+      ) / 100
+      : 0;
 
     return {
       summary: {
         mode: team.contributionMode,
         gamesCount: games.length,
-        obligationsCount: obligations.length,
+        obligationsCount: directorEntries.reduce((sum, item) => sum + item.totals.obligationsCount, 0),
         monthlyContributionPerDirector:
           team.contributionMode === 'MONTHLY' ? monthlyContributionPerDirector : null,
         expectedTotalPerDirector,
       },
       games,
       obligations,
-      directors: directors.map((director) =>
-        buildDirectorConsolidation(
-          director,
-          obligations,
-          paymentsByDirector.get(director.id) ?? [],
-          team.contributionMode,
-        ),
-      ),
+      directors: directorEntries,
     };
   }
 }

@@ -9,13 +9,17 @@ describe('TransactionsService', () => {
   const gameFindUnique = jest.fn();
   const categoryFindUnique = jest.fn();
   const directorFindUnique = jest.fn();
+  const collectionPlanFindFirst = jest.fn();
   const create = jest.fn<Promise<unknown>, [unknown]>();
+  const transactionFindUnique = jest.fn();
+  const transactionUpdate = jest.fn();
   const transaction = jest.fn((operations: Promise<unknown>[]) => Promise.all(operations));
   const prisma = {
-    transaction: { findMany, count, create },
+    transaction: { findMany, count, create, findUnique: transactionFindUnique, update: transactionUpdate },
     game: { findUnique: gameFindUnique },
     category: { findUnique: categoryFindUnique },
     director: { findUnique: directorFindUnique },
+    collectionPlan: { findFirst: collectionPlanFindFirst },
     $transaction: transaction,
   } as unknown as PrismaService;
   const service = new TransactionsService(prisma);
@@ -33,6 +37,7 @@ describe('TransactionsService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    collectionPlanFindFirst.mockResolvedValue(null);
   });
 
   it('paginates and filters transactions before querying the database', async () => {
@@ -62,9 +67,9 @@ describe('TransactionsService', () => {
     };
     expect(findArgs.skip).toBe(20);
     expect(findArgs.take).toBe(20);
-    expect(findArgs.where).toEqual({ teamId: 'team-1', gameId: 'game-1', type: 'ENTRADA' });
+    expect(findArgs.where).toEqual({ teamId: 'team-1', gameId: 'game-1', type: 'ENTRADA', reversedAt: null });
     expect(count).toHaveBeenCalledWith({
-      where: { teamId: 'team-1', gameId: 'game-1', type: 'ENTRADA' },
+      where: { teamId: 'team-1', gameId: 'game-1', type: 'ENTRADA', reversedAt: null },
     });
   });
 
@@ -77,7 +82,7 @@ describe('TransactionsService', () => {
 
   it('creates a transaction only with entities from the active team', async () => {
     gameFindUnique.mockResolvedValue({ status: GameStatus.ABERTO });
-    categoryFindUnique.mockResolvedValue({ type: CategoryType.ENTRADA });
+    categoryFindUnique.mockResolvedValue({ id: 'category-1', type: CategoryType.ENTRADA });
     directorFindUnique.mockResolvedValue({ id: 'director-1' });
     create.mockResolvedValue({ id: 'transaction-1' });
 
@@ -106,5 +111,39 @@ describe('TransactionsService', () => {
     };
     expect(createArgs.data.teamId).toBe('team-1');
     expect(createArgs.data.createdByUserId).toBe('user-1');
+  });
+
+  it('blocks direct deletion of payments managed by collections', async () => {
+    transactionFindUnique.mockResolvedValue({
+      id: 'transaction-1',
+      game: null,
+      collectionPayment: { id: 'payment-1' },
+    });
+
+    await expect(service.remove('transaction-1', 'Motivo', user)).rejects.toThrow(
+      'Pagamentos de arrecadação devem ser estornados no módulo de arrecadações.',
+    );
+    expect(transactionUpdate).not.toHaveBeenCalled();
+  });
+
+  it('soft-reverses ordinary transactions instead of deleting history', async () => {
+    transactionFindUnique.mockResolvedValue({
+      id: 'transaction-1',
+      reversedAt: null,
+      game: { status: GameStatus.ABERTO },
+      collectionPayment: null,
+    });
+    transactionUpdate.mockResolvedValue({ id: 'transaction-1' });
+
+    await service.remove('transaction-1', 'Valor incorreto', user);
+
+    expect(transactionUpdate).toHaveBeenCalledWith({
+      where: { id_teamId: { id: 'transaction-1', teamId: 'team-1' } },
+      data: {
+        reversedAt: expect.any(Date),
+        reversedByUserId: 'user-1',
+        reversalReason: 'Valor incorreto',
+      },
+    });
   });
 });
