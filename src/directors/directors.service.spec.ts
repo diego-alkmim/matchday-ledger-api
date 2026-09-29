@@ -49,6 +49,8 @@ describe('DirectorsService collection role lifecycle', () => {
     expect(roleDeleteMany).toHaveBeenCalledWith({
       where: expect.objectContaining({ teamId: 'team-1', memberId: 'member-1' }),
     });
-    expect(reconciliation.reconcileInTransaction).toHaveBeenCalledWith(tx, 'team-1', 'user-1');
+    expect(reconciliation.reconcileInTransaction).toHaveBeenCalledWith(
+      tx, 'team-1', 'user-1', 'member-1',
+    );
   });
 });

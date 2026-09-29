@@ -65,7 +65,7 @@ export class DirectorsService {
         });
       }
       const director = await tx.director.create({ data: { ...data, teamId, memberId: member.id } });
-      await this.reconciliation.reconcileInTransaction(tx, teamId, actorId);
+      await this.reconciliation.reconcileInTransaction(tx, teamId, actorId, member.id);
       return director;
     });
     return director;
@@ -122,8 +122,8 @@ export class DirectorsService {
           }
         }
       }
-      if (data.active !== undefined) {
-        await this.reconciliation.reconcileInTransaction(tx, teamId, actorId);
+      if (data.active !== undefined && director.memberId) {
+        await this.reconciliation.reconcileInTransaction(tx, teamId, actorId, director.memberId);
       }
       return director;
     });
@@ -152,7 +152,9 @@ export class DirectorsService {
           });
         }
       }
-      await this.reconciliation.reconcileInTransaction(tx, teamId, actorId);
+      if (director.memberId) {
+        await this.reconciliation.reconcileInTransaction(tx, teamId, actorId, director.memberId);
+      }
       return updated;
     });
     return updated;

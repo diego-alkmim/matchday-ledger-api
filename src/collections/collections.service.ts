@@ -102,7 +102,7 @@ export class CollectionsService {
           data: { active: date >= today },
         }),
       ]);
-      await this.reconciliation.reconcileInTransaction(tx, teamId, actorId);
+      await this.reconciliation.reconcileInTransaction(tx, teamId, actorId, id);
       return result;
     });
   }
@@ -132,7 +132,7 @@ export class CollectionsService {
           await tx.director.create({ data: { teamId, memberId, name: member.name, contact: member.contact } });
         }
       }
-      await this.reconciliation.reconcileInTransaction(tx, teamId, actorId);
+      await this.reconciliation.reconcileInTransaction(tx, teamId, actorId, memberId);
       await generateObligationsThroughToday(
         this.generation, this.ledger, tx, teamId, startDate, collectionToday(),
       );
@@ -190,7 +190,7 @@ export class CollectionsService {
           data: { active: false, inactiveAt: endDate < assignment.startsAt ? today : endDate },
         });
       }
-      await this.reconciliation.reconcileInTransaction(tx, teamId, actorId);
+      await this.reconciliation.reconcileInTransaction(tx, teamId, actorId, memberId);
       return { ...assignment, endsAt: endDate < assignment.startsAt ? null : endDate };
     });
     return result;
@@ -278,9 +278,15 @@ export class CollectionsService {
     const now = new Date();
     const periodFrom = from ?? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString().slice(0, 10);
     const periodTo = to ?? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
+    const periodStart = new Date(`${periodFrom}T00:00:00.000Z`);
+    const periodEnd = new Date(`${periodTo}T00:00:00.000Z`);
+    const periodDays = Math.floor((periodEnd.getTime() - periodStart.getTime()) / 86_400_000) + 1;
+    if (periodDays < 1 || periodDays > 366) {
+      throw new BadRequestException('O período deve ter no máximo 366 dias e a data inicial não pode superar a final.');
+    }
     const where: Prisma.CollectionObligationWhereInput = {
       teamId,
-      dueDate: { gte: new Date(periodFrom), lte: new Date(`${periodTo}T23:59:59.999Z`) },
+      dueDate: { gte: periodStart, lte: new Date(`${periodTo}T23:59:59.999Z`) },
     };
     const obligations = await this.prisma.collectionObligation.findMany({
       where,
@@ -296,7 +302,7 @@ export class CollectionsService {
       },
       orderBy: [{ dueDate: 'asc' }, { member: { name: 'asc' } }],
     });
-    const [payments, creditPayments] = await Promise.all([
+    const [payments, creditBalance] = await Promise.all([
       this.prisma.collectionPayment.findMany({
         where: {
           teamId,
@@ -313,9 +319,9 @@ export class CollectionsService {
         },
         orderBy: { createdAt: 'desc' },
       }),
-      this.prisma.collectionPayment.findMany({
+      this.prisma.collectionPayment.aggregate({
         where: { teamId, status: 'POSTED' },
-        select: { amount: true, allocations: { where: { releasedAt: null }, select: { amount: true } } },
+        _sum: { availableAmount: true },
       }),
     ]);
     const obligationTotals = obligations.reduce((acc, item) => {
@@ -326,10 +332,7 @@ export class CollectionsService {
       return acc;
     }, { expected: 0, allocated: 0 });
     const received = payments.reduce((sum, payment) => sum + Number(payment.amount), 0);
-    const credit = creditPayments.reduce((acc, payment) => {
-      const allocated = payment.allocations.reduce((sum, item) => sum + Number(item.amount), 0);
-      return acc + Math.max(Number(payment.amount) - allocated, 0);
-    }, 0);
+    const credit = Number(creditBalance._sum.availableAmount ?? 0);
     return {
       obligations,
       payments,

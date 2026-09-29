@@ -50,7 +50,7 @@ export class CollectionsRoleScheduleService {
         where: { id: assignment.id },
         data: { startsAt: startDate },
       });
-      await this.reconciliation.reconcileInTransaction(tx, teamId, actorId);
+      await this.reconciliation.reconcileInTransaction(tx, teamId, actorId, memberId);
       await generateObligationsThroughToday(
         this.generation,
         this.ledger,

@@ -12,6 +12,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AUTOMATIC_CANCELLATION_REASON } from './collections.constants';
 import { payableObligations, runSerializable } from './collections-transaction';
 import { loadPaymentContext } from './collection-payment-context';
+import { releaseActiveAllocationsForObligation, releaseExcessAllocations } from './collection-allocation-balance';
 import { AdjustObligationDto, CreateCollectionPaymentDto } from './dto/collections.dto';
 
 @Injectable()
@@ -47,11 +48,13 @@ export class CollectionsLedgerService {
           planId: plan.id,
           transactionId: transaction.id,
           amount: dto.amount,
+          availableAmount: dto.amount,
           idempotencyKey,
         },
       });
       await this.allocatePayment(
         tx,
+        user.teamId,
         payment.id,
         member.id,
         plan.exclusiveGroup,
@@ -83,28 +86,28 @@ export class CollectionsLedgerService {
 
   async applyAvailableCreditsInTransaction(tx: Prisma.TransactionClient, teamId: string) {
     const payments = await tx.collectionPayment.findMany({
-      where: { teamId, status: CollectionPaymentStatus.POSTED },
+      where: {
+        teamId,
+        status: CollectionPaymentStatus.POSTED,
+        availableAmount: { gt: 0 },
+      },
       include: {
-        allocations: { where: { releasedAt: null } },
         transaction: { select: { gameId: true, game: { select: { date: true } } } },
         plan: { select: { exclusiveGroup: true } },
       },
       orderBy: { createdAt: 'asc' },
     });
     for (const payment of payments) {
-      const allocated = payment.allocations.reduce((sum, item) => sum.plus(item.amount), new Prisma.Decimal(0));
-      const remaining = payment.amount.minus(allocated);
-      if (remaining.gt(0)) {
-        await this.allocatePayment(
-          tx,
-          payment.id,
-          payment.memberId,
-          payment.plan.exclusiveGroup,
-          remaining.toNumber(),
-          payment.transaction.gameId ?? undefined,
-          payment.transaction.game?.date,
-        );
-      }
+      await this.allocatePayment(
+        tx,
+        teamId,
+        payment.id,
+        payment.memberId,
+        payment.plan.exclusiveGroup,
+        payment.availableAmount.toNumber(),
+        payment.transaction.gameId ?? undefined,
+        payment.transaction.game?.date,
+      );
     }
   }
 
@@ -139,7 +142,13 @@ export class CollectionsLedgerService {
       const now = new Date();
       await tx.collectionPayment.update({
         where: { id: payment.id },
-        data: { status: CollectionPaymentStatus.REVERSED, reversedAt: now, reversedByUserId: user.sub, reversalReason: reason },
+        data: {
+          status: CollectionPaymentStatus.REVERSED,
+          availableAmount: 0,
+          reversedAt: now,
+          reversedByUserId: user.sub,
+          reversalReason: reason,
+        },
       });
       await tx.transaction.update({
         where: { id: payment.transactionId },
@@ -172,10 +181,7 @@ export class CollectionsLedgerService {
         data: { obligationId: id, type: dto.type, amount: dto.amount ?? 0, reason: dto.reason, createdByUserId: user.sub },
       });
       if (dto.type === AdjustmentType.CANCELLATION || dto.type === AdjustmentType.WAIVER) {
-        await tx.collectionAllocation.updateMany({
-          where: { obligationId: id, releasedAt: null },
-          data: { releasedAt: new Date(), releaseReason: dto.reason },
-        });
+        await this.releaseActiveAllocationsForObligationInTransaction(tx, id, dto.reason);
       }
       const result = await this.recalculateObligation(tx, id);
       await this.applyAvailableCreditsInTransaction(tx, user.teamId);
@@ -214,6 +220,7 @@ export class CollectionsLedgerService {
 
   private async allocatePayment(
     tx: Prisma.TransactionClient,
+    teamId: string,
     paymentId: string,
     memberId: string,
     exclusiveGroup: string,
@@ -223,26 +230,57 @@ export class CollectionsLedgerService {
   ) {
     const availableObligations = await tx.collectionObligation.findMany({
       where: {
+        teamId,
         memberId,
         plan: { exclusiveGroup },
         status: { in: [ObligationStatus.OPEN, ObligationStatus.PARTIAL] },
+      },
+      include: {
+        allocations: {
+          where: { paymentId, releasedAt: null },
+          select: { id: true },
+        },
       },
       orderBy: [{ dueDate: 'asc' }, { createdAt: 'asc' }],
     });
     const obligations = payableObligations(availableObligations, ownGameId, ownGameDate);
     let remaining = new Prisma.Decimal(amount);
+    let allocatedNow = new Prisma.Decimal(0);
     for (const obligation of obligations) {
       const missing = obligation.expectedAmount.minus(obligation.allocatedAmount);
       if (missing.lte(0) || remaining.lte(0)) continue;
       const applied = Prisma.Decimal.min(missing, remaining);
-      await tx.collectionAllocation.upsert({
-        where: { paymentId_obligationId: { paymentId, obligationId: obligation.id } },
-        create: { paymentId, obligationId: obligation.id, amount: applied },
-        update: { amount: applied, releasedAt: null, releaseReason: null },
-      });
+      const activeAllocation = obligation.allocations[0];
+      if (activeAllocation) {
+        await tx.collectionAllocation.update({
+          where: { id: activeAllocation.id },
+          data: { amount: { increment: applied } },
+        });
+      } else {
+        await tx.collectionAllocation.upsert({
+          where: { paymentId_obligationId: { paymentId, obligationId: obligation.id } },
+          create: { paymentId, obligationId: obligation.id, amount: applied },
+          update: { amount: applied, releasedAt: null, releaseReason: null },
+        });
+      }
       remaining = remaining.minus(applied);
+      allocatedNow = allocatedNow.plus(applied);
       await this.recalculateObligation(tx, obligation.id);
     }
+    if (allocatedNow.gt(0)) {
+      await tx.collectionPayment.update({
+        where: { id: paymentId },
+        data: { availableAmount: { decrement: allocatedNow } },
+      });
+    }
+  }
+
+  async releaseActiveAllocationsForObligationInTransaction(
+    tx: Prisma.TransactionClient,
+    obligationId: string,
+    reason: string,
+  ) {
+    return releaseActiveAllocationsForObligation(tx, obligationId, reason);
   }
 
   private async recalculateObligation(tx: Prisma.TransactionClient, id: string) {
@@ -252,7 +290,7 @@ export class CollectionsLedgerService {
         adjustments: { where: { reversedAt: null } },
         allocations: {
           where: { releasedAt: null },
-          include: { payment: { select: { status: true } } },
+          include: { payment: { select: { id: true, status: true } } },
         },
       },
     });
@@ -268,7 +306,7 @@ export class CollectionsLedgerService {
       new Prisma.Decimal(0),
     );
     if (!terminal && allocated.gt(expected)) {
-      await this.releaseExcessAllocations(tx, obligation.allocations, allocated.minus(expected));
+      await releaseExcessAllocations(tx, obligation.allocations, allocated.minus(expected));
       allocated = expected;
     }
     const status = terminal?.type === AdjustmentType.CANCELLATION
@@ -282,40 +320,6 @@ export class CollectionsLedgerService {
     });
   }
 
-  private async releaseExcessAllocations(
-    tx: Prisma.TransactionClient,
-    allocations: Array<{
-      id: string;
-      amount: Prisma.Decimal;
-      createdAt: Date;
-      payment: { status: CollectionPaymentStatus };
-    }>,
-    excessInput: Prisma.Decimal,
-  ) {
-    let excess = excessInput;
-    const posted = allocations
-      .filter((item) => item.payment.status === CollectionPaymentStatus.POSTED)
-      .sort((first, second) => second.createdAt.getTime() - first.createdAt.getTime());
-    for (const allocation of posted) {
-      if (excess.lte(0)) break;
-      if (allocation.amount.lte(excess)) {
-        await tx.collectionAllocation.update({
-          where: { id: allocation.id },
-          data: {
-            releasedAt: new Date(),
-            releaseReason: 'Excedente liberado após recálculo da obrigação.',
-          },
-        });
-        excess = excess.minus(allocation.amount);
-      } else {
-        await tx.collectionAllocation.update({
-          where: { id: allocation.id },
-          data: { amount: allocation.amount.minus(excess) },
-        });
-        excess = new Prisma.Decimal(0);
-      }
-    }
-  }
   private async resolveDirectorId(tx: Prisma.TransactionClient, teamId: string, memberId: string) {
     const director = await tx.director.findFirst({ where: { teamId, memberId }, select: { id: true } });
     return director?.id ?? null;

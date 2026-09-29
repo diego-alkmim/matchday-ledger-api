@@ -64,6 +64,16 @@ describe('CollectionsGenerationService', () => {
     await expect(service.generate('team-1', '2026-09-01', '2026-09-30')).resolves.toEqual({ created: 0 });
     expect(obligationCreateMany).not.toHaveBeenCalled();
   });
+
+  it('rejects an oversized manual generation period before querying the database', async () => {
+    await expect(service.generate(
+      'team-1', '2025-01-01', '2026-01-02', 366,
+    )).rejects.toThrow('O período máximo permitido é de 366 dias.');
+
+    expect(planFindMany).not.toHaveBeenCalled();
+    expect(memberFindMany).not.toHaveBeenCalled();
+    expect(gameFindMany).not.toHaveBeenCalled();
+  });
 });
 
 function plan(id: string, audienceRole: MemberRole, priority: number, frequency: CollectionFrequency = CollectionFrequency.MONTHLY) {

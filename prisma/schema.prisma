@@ -200,6 +200,7 @@ model Transaction {
 
   @@unique([id, teamId])
   @@index([teamId, createdAt])
+  @@index([teamId, date])
   @@index([teamId, gameId])
   @@index([teamId, categoryId])
   @@index([teamId, directorId])
@@ -335,6 +336,7 @@ model CollectionPayment {
   transaction      Transaction             @relation(fields: [transactionId, teamId], references: [id, teamId], onDelete: Restrict)
   transactionId    String                  @unique
   amount           Decimal                 @db.Decimal(10, 2)
+  availableAmount  Decimal                 @default(0) @db.Decimal(10, 2)
   idempotencyKey   String
   status           CollectionPaymentStatus @default(POSTED)
   reversedAt       DateTime?
@@ -347,6 +349,7 @@ model CollectionPayment {
   @@unique([transactionId, teamId])
   @@unique([teamId, idempotencyKey])
   @@index([teamId, memberId, status])
+  @@index([teamId, status, availableAmount, createdAt])
 }
 
 model CollectionAllocation {

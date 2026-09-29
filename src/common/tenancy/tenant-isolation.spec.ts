@@ -65,6 +65,7 @@ describe('Tenant isolation for team-owned records', () => {
       prisma,
       'team-b',
       'user-1',
+      'member-1',
     );
   });
 });

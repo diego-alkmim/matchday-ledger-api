@@ -29,6 +29,7 @@ describe('CollectionsLedgerService', () => {
   const adjustmentFindUnique = jest.fn();
   const adjustmentUpdate = jest.fn();
   const allocationUpdateMany = jest.fn();
+  const allocationFindMany = jest.fn();
   const allocationUpsert = jest.fn();
   const allocationUpdate = jest.fn();
   const memberFindUnique = jest.fn();
@@ -43,7 +44,12 @@ describe('CollectionsLedgerService', () => {
       findUniqueOrThrow: obligationFindUniqueOrThrow, findMany: obligationFindMany, update: obligationUpdate,
     },
     collectionAdjustment: { create: adjustmentCreate, findUnique: adjustmentFindUnique, update: adjustmentUpdate },
-    collectionAllocation: { updateMany: allocationUpdateMany, upsert: allocationUpsert, update: allocationUpdate },
+    collectionAllocation: {
+      findMany: allocationFindMany,
+      updateMany: allocationUpdateMany,
+      upsert: allocationUpsert,
+      update: allocationUpdate,
+    },
     member: { findUnique: memberFindUnique },
     collectionPlan: { findUnique: planFindUnique, findFirst: planFindFirst },
     game: { findUnique: gameFindUnique },
@@ -62,6 +68,7 @@ describe('CollectionsLedgerService', () => {
     jest.clearAllMocks();
     paymentFindMany.mockResolvedValue([]);
     paymentFindUnique.mockResolvedValue(null);
+    allocationFindMany.mockResolvedValue([]);
   });
 
   it('requires a game for a per-game payment', async () => {
@@ -138,7 +145,10 @@ describe('CollectionsLedgerService', () => {
     }, user)).resolves.toBe(result);
 
     expect(paymentCreate).toHaveBeenCalledWith({
-      data: expect.objectContaining({ idempotencyKey: expect.any(String) }),
+      data: expect.objectContaining({
+        idempotencyKey: expect.any(String),
+        availableAmount: 70,
+      }),
     });
   });
 
@@ -182,7 +192,13 @@ describe('CollectionsLedgerService', () => {
 
     await expect(service.reversePayment('payment-1', 'Lançamento duplicado', user)).resolves.toEqual({ reversed: true });
 
-    expect(paymentUpdate).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: CollectionPaymentStatus.REVERSED, reversalReason: 'Lançamento duplicado' }) }));
+    expect(paymentUpdate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        status: CollectionPaymentStatus.REVERSED,
+        availableAmount: 0,
+        reversalReason: 'Lançamento duplicado',
+      }),
+    }));
     expect(transactionUpdate).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ reversalReason: 'Lançamento duplicado' }) }));
     expect(obligationUpdate).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ allocatedAmount: new Prisma.Decimal(0), status: ObligationStatus.OPEN }) }));
   });
@@ -196,6 +212,10 @@ describe('CollectionsLedgerService', () => {
       adjustments: [{ type: AdjustmentType.WAIVER, amount: new Prisma.Decimal(0) }], allocations: [],
     });
     obligationUpdate.mockResolvedValue({ id: 'obligation-1', status: ObligationStatus.WAIVED });
+    allocationFindMany.mockResolvedValue([{
+      paymentId: 'payment-1', amount: new Prisma.Decimal(70),
+      payment: { status: CollectionPaymentStatus.POSTED },
+    }]);
 
     await service.adjustObligation(
       'obligation-1',
@@ -206,6 +226,10 @@ describe('CollectionsLedgerService', () => {
     expect(allocationUpdateMany).toHaveBeenCalledWith({
       where: { obligationId: 'obligation-1', releasedAt: null },
       data: { releasedAt: expect.any(Date), releaseReason: 'Isenção aprovada' },
+    });
+    expect(paymentUpdate).toHaveBeenCalledWith({
+      where: { id: 'payment-1' },
+      data: { availableAmount: { increment: new Prisma.Decimal(70) } },
     });
     expect(obligationUpdate).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ expectedAmount: 0, allocatedAmount: 0, status: ObligationStatus.WAIVED }),
@@ -218,15 +242,17 @@ describe('CollectionsLedgerService', () => {
     await (service as unknown as {
       allocatePayment: (
         transaction: typeof tx,
+        teamId: string,
         paymentId: string,
         memberId: string,
         group: string,
         amount: number,
       ) => Promise<void>;
-    }).allocatePayment(tx, 'payment-1', 'member-1', 'membership', 70);
+    }).allocatePayment(tx, 'team-1', 'payment-1', 'member-1', 'membership', 70);
 
     expect(obligationFindMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({
+        teamId: 'team-1',
         memberId: 'member-1',
         plan: { exclusiveGroup: 'membership' },
       }),
@@ -235,8 +261,8 @@ describe('CollectionsLedgerService', () => {
 
   it('does not use per-game excess to settle a future game', async () => {
     obligationFindMany.mockResolvedValue([
-      { id: 'own', gameId: 'game-1', dueDate: new Date('2026-09-10'), expectedAmount: new Prisma.Decimal(70), allocatedAmount: new Prisma.Decimal(0) },
-      { id: 'future', gameId: 'game-2', dueDate: new Date('2026-09-20'), expectedAmount: new Prisma.Decimal(70), allocatedAmount: new Prisma.Decimal(0) },
+      { id: 'own', gameId: 'game-1', dueDate: new Date('2026-09-10'), expectedAmount: new Prisma.Decimal(70), allocatedAmount: new Prisma.Decimal(0), allocations: [] },
+      { id: 'future', gameId: 'game-2', dueDate: new Date('2026-09-20'), expectedAmount: new Prisma.Decimal(70), allocatedAmount: new Prisma.Decimal(0), allocations: [] },
     ]);
     obligationFindUniqueOrThrow.mockResolvedValue({
       id: 'own', originalAmount: new Prisma.Decimal(70), adjustments: [], allocations: [],
@@ -245,24 +271,29 @@ describe('CollectionsLedgerService', () => {
     await (service as unknown as {
       allocatePayment: (
         transaction: typeof tx,
+        teamId: string,
         paymentId: string,
         memberId: string,
         group: string,
         amount: number,
         ownGameId: string,
       ) => Promise<void>;
-    }).allocatePayment(tx, 'payment-1', 'member-1', 'membership', 140, 'game-1');
+    }).allocatePayment(tx, 'team-1', 'payment-1', 'member-1', 'membership', 140, 'game-1');
 
     expect(allocationUpsert).toHaveBeenCalledTimes(1);
     expect(allocationUpsert).toHaveBeenCalledWith(expect.objectContaining({
       create: expect.objectContaining({ obligationId: 'own' }),
     }));
+    expect(paymentUpdate).toHaveBeenCalledWith({
+      where: { id: 'payment-1' },
+      data: { availableAmount: { decrement: new Prisma.Decimal(70) } },
+    });
   });
 
   it('uses an open game date as the cutoff when an inactive member has only older debts', async () => {
     obligationFindMany.mockResolvedValue([
-      { id: 'past', gameId: 'game-old', dueDate: new Date('2026-08-10'), expectedAmount: new Prisma.Decimal(70), allocatedAmount: new Prisma.Decimal(0) },
-      { id: 'future', gameId: 'game-future', dueDate: new Date('2026-10-10'), expectedAmount: new Prisma.Decimal(70), allocatedAmount: new Prisma.Decimal(0) },
+      { id: 'past', gameId: 'game-old', dueDate: new Date('2026-08-10'), expectedAmount: new Prisma.Decimal(70), allocatedAmount: new Prisma.Decimal(0), allocations: [] },
+      { id: 'future', gameId: 'game-future', dueDate: new Date('2026-10-10'), expectedAmount: new Prisma.Decimal(70), allocatedAmount: new Prisma.Decimal(0), allocations: [] },
     ]);
     obligationFindUniqueOrThrow.mockResolvedValue({
       id: 'past', originalAmount: new Prisma.Decimal(70), adjustments: [], allocations: [],
@@ -271,6 +302,7 @@ describe('CollectionsLedgerService', () => {
     await (service as unknown as {
       allocatePayment: (
         transaction: typeof tx,
+        teamId: string,
         paymentId: string,
         memberId: string,
         group: string,
@@ -279,7 +311,8 @@ describe('CollectionsLedgerService', () => {
         ownGameDate: Date,
       ) => Promise<void>;
     }).allocatePayment(
-      tx, 'payment-1', 'member-1', 'membership', 70, 'game-current', new Date('2026-09-20'),
+      tx, 'team-1', 'payment-1', 'member-1', 'membership', 70,
+      'game-current', new Date('2026-09-20'),
     );
 
     expect(allocationUpsert).toHaveBeenCalledTimes(1);
@@ -331,7 +364,7 @@ describe('CollectionsLedgerService', () => {
       id: 'obligation-1', originalAmount: new Prisma.Decimal(70), adjustments: [],
       allocations: [{
         id: 'allocation-1', amount: new Prisma.Decimal(100), createdAt: new Date(),
-        payment: { status: CollectionPaymentStatus.POSTED },
+        payment: { id: 'payment-1', status: CollectionPaymentStatus.POSTED },
       }],
     });
     obligationUpdate.mockResolvedValue({ id: 'obligation-1', status: ObligationStatus.PAID });
@@ -342,8 +375,53 @@ describe('CollectionsLedgerService', () => {
       where: { id: 'allocation-1' },
       data: { amount: new Prisma.Decimal(70) },
     });
+    expect(paymentUpdate).toHaveBeenCalledWith({
+      where: { id: 'payment-1' },
+      data: { availableAmount: { increment: new Prisma.Decimal(30) } },
+    });
     expect(obligationUpdate).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ allocatedAmount: new Prisma.Decimal(70) }),
     }));
+  });
+
+  it('loads only posted payments that still have available credit', async () => {
+    await service.applyAvailableCreditsInTransaction(tx as never, 'team-1');
+
+    expect(paymentFindMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        teamId: 'team-1',
+        status: CollectionPaymentStatus.POSTED,
+        availableAmount: { gt: 0 },
+      },
+    }));
+  });
+
+  it('increments an existing active allocation instead of replacing its amount', async () => {
+    obligationFindMany.mockResolvedValue([{
+      id: 'obligation-1', gameId: null, dueDate: new Date('2026-09-20'),
+      expectedAmount: new Prisma.Decimal(70), allocatedAmount: new Prisma.Decimal(30),
+      allocations: [{ id: 'allocation-1' }],
+    }]);
+    obligationFindUniqueOrThrow.mockResolvedValue({
+      id: 'obligation-1', originalAmount: new Prisma.Decimal(70),
+      adjustments: [], allocations: [],
+    });
+
+    await (service as unknown as {
+      allocatePayment: (
+        transaction: typeof tx, teamId: string, paymentId: string,
+        memberId: string, group: string, amount: number,
+      ) => Promise<void>;
+    }).allocatePayment(tx, 'team-1', 'payment-1', 'member-1', 'membership', 40);
+
+    expect(allocationUpdate).toHaveBeenCalledWith({
+      where: { id: 'allocation-1' },
+      data: { amount: { increment: new Prisma.Decimal(40) } },
+    });
+    expect(allocationUpsert).not.toHaveBeenCalled();
+    expect(paymentUpdate).toHaveBeenCalledWith({
+      where: { id: 'payment-1' },
+      data: { availableAmount: { decrement: new Prisma.Decimal(40) } },
+    });
   });
 });

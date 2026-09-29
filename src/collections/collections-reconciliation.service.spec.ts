@@ -29,6 +29,7 @@ describe('CollectionsReconciliationService', () => {
   const ledger = {
     applyAvailableCreditsInTransaction: jest.fn(),
     restoreAutomaticallyCancelledObligationInTransaction: jest.fn(),
+    releaseActiveAllocationsForObligationInTransaction: jest.fn(),
   } as unknown as CollectionsLedgerService;
   const service = new CollectionsReconciliationService(prisma, ledger);
 
@@ -102,5 +103,16 @@ describe('CollectionsReconciliationService', () => {
     await expect(service.runSerializable(operation)).resolves.toBe('ok');
 
     expect(prisma.$transaction).toHaveBeenCalledTimes(2);
+  });
+
+  it('limits reconciliation queries to the affected member when provided', async () => {
+    planFindMany.mockResolvedValue([]);
+    obligationFindMany.mockResolvedValue([]);
+
+    await service.reconcile('team-1', 'user-1', 'member-1');
+
+    expect(obligationFindMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ teamId: 'team-1', memberId: 'member-1' }),
+    }));
   });
 });

@@ -42,7 +42,9 @@ describe('CollectionsRoleScheduleService', () => {
     expect(roleUpdate).toHaveBeenCalledWith({
       where: { id: 'role-future' }, data: { startsAt: new Date('2026-12-01') },
     });
-    expect(reconciliation.reconcileInTransaction).toHaveBeenCalledWith(tx, 'team-1', 'user-1');
+    expect(reconciliation.reconcileInTransaction).toHaveBeenCalledWith(
+      tx, 'team-1', 'user-1', 'member-1',
+    );
     expect(generateInTransaction).not.toHaveBeenCalled();
   });
 

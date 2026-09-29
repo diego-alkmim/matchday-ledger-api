@@ -44,6 +44,7 @@ describe('CollectionsDirectorReportService', () => {
     }]);
     paymentFindMany.mockResolvedValue([{
       memberId: 'member-1', planId: 'plan-1', amount: new Prisma.Decimal(100),
+      availableAmount: new Prisma.Decimal(0),
       status: CollectionPaymentStatus.POSTED, transaction: { date: new Date('2026-09-20') },
       allocations: [{
         amount: new Prisma.Decimal(100),
@@ -60,9 +61,16 @@ describe('CollectionsDirectorReportService', () => {
       missingObligations: [],
     });
     expect(paymentFindMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({
-        OR: expect.any(Array),
-      }),
+      where: expect.objectContaining({ OR: [
+        expect.objectContaining({
+          planId: { in: ['plan-1'] },
+          transaction: { date: {
+            gte: new Date('2026-09-01T00:00:00.000Z'),
+            lte: new Date('2026-09-30T23:59:59.999Z'),
+          } },
+        }),
+        expect.objectContaining({ allocations: expect.any(Object) }),
+      ] }),
     }));
   });
 
@@ -81,6 +89,7 @@ describe('CollectionsDirectorReportService', () => {
     }]);
     paymentFindMany.mockResolvedValue([{
       memberId: 'member-1', planId: 'plan-1', amount: new Prisma.Decimal(70),
+      availableAmount: new Prisma.Decimal(0),
       transaction: { date: new Date('2026-09-10') },
       allocations: [{
         amount: new Prisma.Decimal(70),
@@ -128,6 +137,7 @@ describe('CollectionsDirectorReportService', () => {
     }]);
     paymentFindMany.mockResolvedValue([{
       memberId: 'member-1', planId: 'player-plan', amount: new Prisma.Decimal(100),
+      availableAmount: new Prisma.Decimal(0),
       transaction: { date: new Date('2026-10-05') },
       allocations: [{
         amount: new Prisma.Decimal(100),

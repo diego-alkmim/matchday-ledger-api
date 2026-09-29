@@ -15,8 +15,8 @@ type PlanWithRates = CollectionPlan & { rates: CollectionPlanRate[] };
 export class CollectionsGenerationService {
   constructor(private prisma: PrismaService) {}
 
-  async generate(teamId: string, fromInput: string, toInput: string) {
-    return this.generateWithClient(this.prisma, teamId, fromInput, toInput);
+  async generate(teamId: string, fromInput: string, toInput: string, maxDays?: number) {
+    return this.generateWithClient(this.prisma, teamId, fromInput, toInput, maxDays);
   }
 
   async generateInTransaction(
@@ -33,10 +33,15 @@ export class CollectionsGenerationService {
     teamId: string,
     fromInput: string,
     toInput: string,
+    maxDays?: number,
   ) {
     const from = this.dateOnly(fromInput);
     const to = this.dateOnly(toInput);
     if (from > to) throw new BadRequestException('O período informado é inválido.');
+    const periodDays = Math.floor((to.getTime() - from.getTime()) / 86_400_000) + 1;
+    if (maxDays && periodDays > maxDays) {
+      throw new BadRequestException(`O período máximo permitido é de ${maxDays} dias.`);
+    }
 
     const [plans, members, games] = await Promise.all([
       client.collectionPlan.findMany({

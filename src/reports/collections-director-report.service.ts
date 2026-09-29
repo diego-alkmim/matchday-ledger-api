@@ -15,7 +15,6 @@ import {
 } from './director-consolidation';
 import { buildHistoricalDirectorEntries, historicalDirectorSelect } from './historical-directors';
 import { isInCollectionRange } from './collection-report-range';
-
 type DirectorReportEntry = ReturnType<typeof buildDirectorConsolidation>;
 type ConsolidatedReport = {
   summary: {
@@ -75,14 +74,24 @@ export class CollectionsDirectorReportService {
           teamId,
           status: CollectionPaymentStatus.POSTED,
           OR: [
-            { planId: { in: planIds } },
-            { allocations: { some: { releasedAt: null, obligation: { planId: { in: planIds } } } } },
+            {
+              planId: { in: planIds },
+              transaction: { date: dateFilter },
+            },
+            {
+              allocations: {
+                some: {
+                  releasedAt: null,
+                  obligation: { planId: { in: planIds }, dueDate: dateFilter },
+                },
+              },
+            },
           ],
         },
         select: {
           memberId: true,
           planId: true,
-          amount: true,
+          availableAmount: true,
           transaction: { select: { date: true } },
           allocations: {
             where: { releasedAt: null },
@@ -97,9 +106,8 @@ export class CollectionsDirectorReportService {
       const allocatedToReport = payment.allocations
         .filter((allocation) => planIdSet.has(allocation.obligation.planId) && isInCollectionRange(allocation.obligation.dueDate, from, to))
         .reduce((sum, allocation) => sum + Number(allocation.amount), 0);
-      const allocatedTotal = payment.allocations.reduce((sum, allocation) => sum + Number(allocation.amount), 0);
       const availableDirectorCredit = planIdSet.has(payment.planId) && isInCollectionRange(payment.transaction.date, from, to)
-        ? Math.max(Number(payment.amount) - allocatedTotal, 0)
+        ? Number(payment.availableAmount)
         : 0;
       paidByMember.set(
         payment.memberId,

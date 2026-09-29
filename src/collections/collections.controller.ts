@@ -108,7 +108,7 @@ export class CollectionsController {
   @Roles(Role.ADMIN)
   @ApiOperation({ summary: 'Gera obrigações idempotentes no período' })
   async generate(@Body() dto: GenerateObligationsDto, @CurrentUser() user: AccessTokenPayload) {
-    const result = await this.generation.generate(user.teamId, dto.from, dto.to);
+    const result = await this.generation.generate(user.teamId, dto.from, dto.to, 366);
     await this.ledger.applyAvailableCredits(user.teamId);
     return result;
   }

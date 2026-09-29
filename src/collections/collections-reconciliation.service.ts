@@ -24,20 +24,26 @@ export class CollectionsReconciliationService {
     private ledger: CollectionsLedgerService,
   ) {}
 
-  async reconcile(teamId: string, actorId: string) {
-    return this.runSerializable((tx) => this.reconcileInTransaction(tx, teamId, actorId));
+  async reconcile(teamId: string, actorId: string, memberId?: string) {
+    return this.runSerializable((tx) => this.reconcileInTransaction(tx, teamId, actorId, memberId));
   }
 
   async runSerializable<T>(operation: (tx: Prisma.TransactionClient) => Promise<T>) {
     return runSerializable(this.prisma, operation, 'Falha ao reconciliar as obrigações financeiras.');
   }
 
-  async reconcileInTransaction(tx: Prisma.TransactionClient, teamId: string, actorId: string) {
+  async reconcileInTransaction(
+    tx: Prisma.TransactionClient,
+    teamId: string,
+    actorId: string,
+    memberId?: string,
+  ) {
     const [plans, obligations] = await Promise.all([
       tx.collectionPlan.findMany({ where: { teamId } }),
       tx.collectionObligation.findMany({
         where: {
           teamId,
+          ...(memberId ? { memberId } : {}),
           status: { in: [ObligationStatus.OPEN, ObligationStatus.PARTIAL, ObligationStatus.PAID, ObligationStatus.CANCELLED] },
         },
         include: {
@@ -64,7 +70,6 @@ export class CollectionsReconciliationService {
     });
 
     if (ineligible.length) {
-      const now = new Date();
       for (const obligation of ineligible) {
         await tx.collectionAdjustment.create({
           data: {
@@ -75,10 +80,11 @@ export class CollectionsReconciliationService {
             createdByUserId: actorId,
           },
         });
-        await tx.collectionAllocation.updateMany({
-          where: { obligationId: obligation.id, releasedAt: null },
-          data: { releasedAt: now, releaseReason: AUTOMATIC_CANCELLATION_RELEASE_REASON },
-        });
+        await this.ledger.releaseActiveAllocationsForObligationInTransaction(
+          tx,
+          obligation.id,
+          AUTOMATIC_CANCELLATION_RELEASE_REASON,
+        );
         await tx.collectionObligation.update({
           where: { id: obligation.id },
           data: { status: ObligationStatus.CANCELLED, expectedAmount: 0, allocatedAmount: 0 },
