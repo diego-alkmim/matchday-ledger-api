@@ -91,4 +91,15 @@ describe('DirectorsService collection role lifecycle', () => {
     expect(generation.generateInTransaction).not.toHaveBeenCalled();
     expect(ledger.applyAvailableCreditsInTransaction).not.toHaveBeenCalled();
   });
+
+  it('repairs a missing active role and generates the related obligations', async () => {
+    directorFindUnique.mockResolvedValue({ id: 'director-1', memberId: 'member-1', active: true });
+    directorUpdate.mockResolvedValue({ id: 'director-1', memberId: 'member-1', active: true });
+    roleFindFirst.mockResolvedValue(null);
+
+    await service.update('director-1', { active: true }, 'team-1', 'user-1');
+
+    expect(roleCreate).toHaveBeenCalled();
+    expect(generation.generateInTransaction).toHaveBeenCalled();
+  });
 });

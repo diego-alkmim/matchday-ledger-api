@@ -85,6 +85,7 @@ export class DirectorsService {
   async update(id: string, data: UpdateDirectorDto, teamId: string, actorId: string) {
     const currentDirector = await this.assertExists(id, teamId);
     const director = await this.reconciliation.runSerializable(async (tx) => {
+      let directorRoleActivated = false;
       const director = await tx.director.update({
         where: { id_teamId: { id, teamId } },
         data: data as Prisma.DirectorUpdateInput,
@@ -126,16 +127,18 @@ export class DirectorsService {
             await tx.memberRoleAssignment.create({
               data: { teamId, memberId: director.memberId, role: MemberRole.DIRECTOR, startsAt: roleDate },
             });
+            directorRoleActivated = true;
           } else if (activeRole.startsAt > roleDate) {
             await tx.memberRoleAssignment.update({
               where: { id: activeRole.id }, data: { startsAt: roleDate },
             });
+            directorRoleActivated = true;
           }
         }
       }
       if (data.active !== undefined && director.memberId) {
         await this.reconciliation.reconcileInTransaction(tx, teamId, actorId, director.memberId);
-        if (data.active && !currentDirector.active) {
+        if (data.active && (!currentDirector.active || directorRoleActivated)) {
           await generateObligationsThroughToday(
             this.generation, this.ledger, tx, teamId, collectionToday(), collectionToday(),
           );
