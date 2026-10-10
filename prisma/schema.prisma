@@ -154,6 +154,7 @@ model Game {
   createdAt                       DateTime      @default(now())
   transactions                    Transaction[]
   collectionObligations           CollectionObligation[]
+  financialCorrections            GameFinancialCorrection[]
 
   @@unique([id, teamId])
   @@index([teamId, date])
@@ -205,6 +206,20 @@ model Transaction {
   @@index([teamId, gameId])
   @@index([teamId, categoryId])
   @@index([teamId, directorId])
+}
+
+model GameFinancialCorrection {
+  id              String   @id @default(cuid())
+  game            Game     @relation(fields: [gameId, teamId], references: [id, teamId], onDelete: Restrict)
+  gameId          String
+  teamId          String
+  previousAmount  Decimal  @db.Decimal(10, 2)
+  newAmount       Decimal  @db.Decimal(10, 2)
+  reason          String
+  createdByUserId String
+  createdAt       DateTime @default(now())
+
+  @@index([teamId, gameId, createdAt])
 }
 
 model Member {
