@@ -1,4 +1,4 @@
-import { GameStatus } from '@prisma/client';
+import { AdjustmentType, CollectionFrequency, GameStatus, MemberRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { GamesService } from './games.service';
 import { CollectionsGenerationService } from '../collections/collections-generation.service';
@@ -13,16 +13,25 @@ describe('GamesService tenant isolation', () => {
   const transactionCount = jest.fn();
   const obligationFindMany = jest.fn();
   const obligationDeleteMany = jest.fn();
+  const adjustmentCreateMany = jest.fn();
+  const correctionCreate = jest.fn();
   const prisma = {
     game: { findMany, findUnique, create, update },
     transaction: { count: transactionCount },
     collectionObligation: { findMany: obligationFindMany, deleteMany: obligationDeleteMany },
+    collectionAdjustment: { createMany: adjustmentCreateMany },
+    gameFinancialCorrection: { create: correctionCreate },
   } as unknown as PrismaService;
   const reconciliation = {
     runSerializable: jest.fn((operation: (client: PrismaService) => Promise<unknown>) => operation(prisma)),
   } as unknown as CollectionsReconciliationService;
-  const generation = { generateInTransaction: jest.fn() } as unknown as CollectionsGenerationService;
-  const ledger = { applyAvailableCreditsInTransaction: jest.fn() } as unknown as CollectionsLedgerService;
+  const generation = {
+    generateInTransaction: jest.fn().mockResolvedValue({ created: 0 }),
+  } as unknown as CollectionsGenerationService;
+  const ledger = {
+    applyAvailableCreditsInTransaction: jest.fn(),
+    recalculateObligationInTransaction: jest.fn(),
+  } as unknown as CollectionsLedgerService;
   const service = new GamesService(prisma, reconciliation, generation, ledger);
 
   beforeEach(() => jest.clearAllMocks());
@@ -158,5 +167,126 @@ describe('GamesService tenant isolation', () => {
     expect(update).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ opponent: 'Novo rival', status: GameStatus.FECHADO }),
     }));
+  });
+
+  it('audits an increase and updates existing director obligations without deleting history', async () => {
+    const date = new Date('2026-09-27T12:00:00.000Z');
+    findUnique.mockResolvedValue({
+      id: 'game-1', date, expectedContributionPerDirector: 70,
+    });
+    transactionCount.mockResolvedValue(2);
+    obligationFindMany.mockResolvedValue([
+      {
+        id: 'obligation-1',
+        roleSnapshot: MemberRole.DIRECTOR,
+        plan: { frequency: CollectionFrequency.PER_GAME },
+        _count: { allocations: 1, adjustments: 0 },
+      },
+      {
+        id: 'player-obligation',
+        roleSnapshot: MemberRole.PLAYER,
+        plan: { frequency: CollectionFrequency.PER_GAME },
+        _count: { allocations: 0, adjustments: 0 },
+      },
+    ]);
+    update.mockResolvedValue({ id: 'game-1', date, expectedContributionPerDirector: 100 });
+
+    const result = await service.correctFinancialValue(
+      'game-1',
+      { expectedContributionPerDirector: 100, reason: 'Valor aprovado estava incorreto.' },
+      'team-1',
+      'user-1',
+    );
+
+    expect(update).toHaveBeenCalledWith({
+      where: { id_teamId: { id: 'game-1', teamId: 'team-1' } },
+      data: { expectedContributionPerDirector: 100 },
+    });
+    expect(transactionCount).toHaveBeenCalledWith({ where: { teamId: 'team-1', gameId: 'game-1' } });
+    expect(correctionCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        gameId: 'game-1', teamId: 'team-1', previousAmount: 70, newAmount: 100,
+        reason: 'Valor aprovado estava incorreto.', createdByUserId: 'user-1',
+      }),
+    });
+    expect(adjustmentCreateMany).toHaveBeenCalledWith({
+      data: [expect.objectContaining({
+        obligationId: 'obligation-1',
+        type: AdjustmentType.SURCHARGE,
+        amount: 30,
+        createdByUserId: 'user-1',
+      })],
+    });
+    expect(ledger.recalculateObligationInTransaction).toHaveBeenCalledWith(prisma, 'obligation-1');
+    expect(ledger.recalculateObligationInTransaction).not.toHaveBeenCalledWith(prisma, 'player-obligation');
+    expect(ledger.applyAvailableCreditsInTransaction).toHaveBeenCalledTimes(1);
+    expect(result).toEqual(expect.objectContaining({ correctedObligations: 1, generatedObligations: 0 }));
+  });
+
+  it('uses a discount when correcting the game value downward', async () => {
+    const date = new Date('2026-09-27T12:00:00.000Z');
+    findUnique.mockResolvedValue({
+      id: 'game-1', date, expectedContributionPerDirector: 100,
+    });
+    transactionCount.mockResolvedValue(1);
+    obligationFindMany.mockResolvedValue([{
+      id: 'obligation-1',
+      roleSnapshot: MemberRole.DIRECTOR,
+      plan: { frequency: CollectionFrequency.PER_GAME },
+      _count: { allocations: 0, adjustments: 0 },
+    }]);
+    update.mockResolvedValue({ id: 'game-1', date, expectedContributionPerDirector: 70 });
+
+    await service.correctFinancialValue(
+      'game-1',
+      { expectedContributionPerDirector: 70, reason: 'Correção aprovada.' },
+      'team-1',
+      'user-1',
+    );
+
+    expect(adjustmentCreateMany).toHaveBeenCalledWith({
+      data: [expect.objectContaining({ type: AdjustmentType.DISCOUNT, amount: 30 })],
+    });
+  });
+
+  it('directs games without financial activity to the regular edit flow', async () => {
+    findUnique.mockResolvedValue({
+      id: 'game-1', date: new Date('2026-09-27T12:00:00.000Z'),
+      expectedContributionPerDirector: 70,
+    });
+    transactionCount.mockResolvedValue(0);
+    obligationFindMany.mockResolvedValue([{
+      id: 'obligation-1',
+      roleSnapshot: MemberRole.DIRECTOR,
+      plan: { frequency: CollectionFrequency.PER_GAME },
+      _count: { allocations: 0, adjustments: 0 },
+    }]);
+
+    await expect(service.correctFinancialValue(
+      'game-1',
+      { expectedContributionPerDirector: 100, reason: 'Correção.' },
+      'team-1',
+      'user-1',
+    )).rejects.toThrow('Este jogo ainda não possui movimentação financeira');
+
+    expect(update).not.toHaveBeenCalled();
+    expect(correctionCreate).not.toHaveBeenCalled();
+  });
+
+  it('rejects a financial correction that keeps the current value', async () => {
+    findUnique.mockResolvedValue({
+      id: 'game-1', date: new Date('2026-09-27T12:00:00.000Z'),
+      expectedContributionPerDirector: 70,
+    });
+
+    await expect(service.correctFinancialValue(
+      'game-1',
+      { expectedContributionPerDirector: 70, reason: 'Correção.' },
+      'team-1',
+      'user-1',
+    )).rejects.toThrow('O novo valor deve ser diferente do valor atual do jogo.');
+
+    expect(transactionCount).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
   });
 });
